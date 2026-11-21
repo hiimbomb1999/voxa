@@ -1,34 +1,60 @@
 # Voxa
 
-Phiên dịch âm thanh trực tiếp trên macOS bằng Rust, Tauri và Gemini Live API. Cần macOS 14.2 trở lên. Bản thử hiện được đóng gói cho Apple Silicon.
+**An open-source, real-time interpreter for macOS.** Follow videos and meetings with bilingual captions and spoken translation, or speak Vietnamese and route the English translation into a call.
 
-## Mở và dịch video
+[Tiếng Việt](docs/huong-dan.md) · [Watch the demo](docs/media/voxa-demo.mp4) · [Contributing](CONTRIBUTING.md)
 
-1. Mở `release/Voxa.app`. Trong **Cài đặt**, dán Gemini API key. Key nằm trong macOS Keychain.
-2. Trong **Phiên dịch**, chọn **Toàn hệ thống** hoặc một ứng dụng đang phát tiếng, rồi chọn ngôn ngữ đích. Nếu tên ứng dụng chưa xuất hiện, phát tiếng và bấm **Làm mới thiết bị**.
-3. Bấm **Bắt đầu dịch** và cấp quyền **System Audio Recording** cho Voxa khi macOS hỏi. Phụ đề có thể hiển thị nổi, song ngữ hoặc chỉ bản dịch.
-4. **Trực tiếp** dùng âm thanh do Gemini Live Translate trả về. Các giọng có tên dùng TTS từ phụ đề đã nhận nên có thể xuất hiện muộn hơn. Khi dùng chế độ chỉ phụ đề, bỏ chọn **Phát giọng dịch**.
+[![Voxa showing bilingual captions, audio controls, and a virtual microphone route](docs/media/live-captions.png)](docs/media/voxa-demo.mp4)
 
-## Gửi tiếng Anh vào Meet hoặc Zoom
+*The screenshots and demo use synthetic captions and device labels.*
 
-1. Cài **BlackHole 2ch** từ [Existential Audio](https://github.com/ExistentialAudio/BlackHole/wiki/Use-BlackHole-as-a-Virtual-Microphone). Có thể dùng `brew install --cask blackhole-2ch`, macOS sẽ yêu cầu xác nhận quản trị để cài.
-2. Trong Meet/Zoom, chọn **BlackHole 2ch** làm microphone. Giữ **loa cuộc họp** ở tai nghe hoặc loa thật. Giữ ngõ ra mặc định của Mac ở loa/tai nghe thật.
-3. Trong Voxa, chọn micro thật của bạn và **Gửi qua BlackHole 2ch**. **Phát âm thử** sẽ gửi một tiếng ngắn vào BlackHole để xem mức micro trong phần kiểm tra thiết bị của Meet/Zoom.
-4. Bấm **Bật dịch micro**, cấp quyền micro và chờ **Giữ phím để nói**. Giữ **Control + Shift + Space** khi nói tiếng Việt, rồi thả phím. Bạn cũng có thể giữ nút trên giao diện. Đầu ra tiếng Anh đi vào BlackHole, chiều nghe đi vào loa hoặc tai nghe.
-5. Để dùng lại micro thật với cuộc gọi, đổi thiết bị đầu vào ngay trong Meet/Zoom.
+## What you can do
 
-## Lịch sử và trợ lý
+- **Follow videos and calls.** Capture system audio or one app, choose a target language, and read bilingual or floating captions. Voxa can lower the original audio while the translation plays.
+- **Speak in a meeting.** Hold **Control + Shift + Space** to speak Vietnamese and send the English audio through **BlackHole 2ch** as the microphone input in Google Meet or Zoom.
+- **Choose how translation is produced.** Gemini Live streams translated voice directly. Soniox streams original and translated captions and can read the translation with its own TTS. Optional VieNeu-TTS produces Vietnamese and English speech locally from translated text.
+- **Keep a record.** Save transcripts to SQLite on the Mac, export TXT, SRT or Markdown, and delete individual sessions. Gemini supports optional summaries and a push-to-talk assistant.
 
-**Lưu transcript** lưu văn bản và mốc thời gian trên Mac, không lưu bản ghi âm. Có thể xuất TXT, Markdown hoặc SRT. SRT xuất các đoạn bản dịch hoặc phản hồi. **Tóm tắt cuộc họp** gửi transcript đã chọn tới Gemini. Trợ lý giọng nói nằm trong **Cài đặt** và dùng micro riêng theo thao tác giữ-nói. Dừng dịch micro của cuộc họp trước khi bật trợ lý.
+| Meeting audio controls | Transcript history |
+| --- | --- |
+| ![Voxa meeting controls with push-to-talk and the BlackHole output](docs/media/meeting-routing.png) | ![Voxa transcript history with export and delete actions](docs/media/history.png) |
 
-## Build và kiểm thử
+## Build and run
 
-Cần Rust stable và Xcode Command Line Tools.
+Requirements are **macOS 14.2 or later**, **Xcode Command Line Tools**, and **Rust stable**. The current packaging workflow targets Apple Silicon.
 
 ```sh
-cargo test --locked --features custom-protocol --manifest-path src-tauri/Cargo.toml
-cargo clippy --locked --all-targets --features custom-protocol --manifest-path src-tauri/Cargo.toml -- -D warnings
+git clone https://github.com/hiimbomb1999/voxa.git
+cd voxa
 ./scripts/bundle.sh
+open release/Voxa.app
 ```
 
-Gói `.app` được ký ad hoc để thử cục bộ. Kiểm thử tự động dùng dữ liệu tổng hợp. Để xác minh độ trễ và chiều nói thực tế, dùng key của bạn, BlackHole và một cuộc gọi thử có người nghe ở đầu kia. Đo riêng thời gian đến phụ đề, thời gian đến âm thanh và khả năng phục hồi sau khi mất mạng.
+1. In **Cài đặt** (Settings), enter your own [Gemini](https://aistudio.google.com/apikey) or [Soniox](https://console.soniox.com/) API key. Select the provider in **Phiên dịch**.
+2. Select the audio source and target language. Start translation and grant **System Audio Recording** when macOS asks.
+3. To send your English voice into a meeting, install [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole/wiki/Use-BlackHole-as-a-Virtual-Microphone). Select your physical microphone in Voxa and BlackHole as the microphone in the meeting. Keep the meeting's speaker routed to headphones or speakers.
+
+For local speech playback, install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run `./scripts/install-vieneu.sh` from the checkout. Then refresh voices in Voxa. The [Vietnamese guide](docs/huong-dan.md) walks through routing tests and troubleshooting.
+
+## Data and current limits
+
+- API keys are stored in macOS Keychain. Cloud translation sends captured audio to the selected provider. Cloud TTS receives the translated text, and requesting a Gemini summary sends the selected transcript to Gemini. Provider quotas, pricing, and data policies apply.
+- Transcript saving is optional. Voxa stores saved text and time markers locally. VieNeu runs speech synthesis locally while speech recognition and translation still use a cloud provider.
+- Voxa processes the audio stream while the source app controls video playback. Translation adds latency, and Voxa can omit overdue audio to catch up while keeping the translated text in captions.
+- Builds produced by the script are ad hoc signed for local development. End-to-end quality depends on the provider, language, and hardware routing.
+
+## Development
+
+```sh
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --locked --all-targets --features custom-protocol --manifest-path src-tauri/Cargo.toml -- -D warnings
+cargo test --locked --all-targets --features custom-protocol --manifest-path src-tauri/Cargo.toml
+```
+
+Rust runs session orchestration and provider transports. Core Audio and CPAL capture and play audio. Tauri hosts the desktop interface, and SQLite stores transcripts. Tests use synthetic audio and loopback provider fixtures.
+
+Ideas for contributions include end-to-end latency benchmarks, better Bluetooth routing diagnostics, English UI strings, and a signed and notarized macOS release.
+
+## License
+
+Voxa's source code is available under the [MIT License](LICENSE). Optional tools, drivers, and model weights are distributed separately under their respective terms, including [BlackHole](https://github.com/ExistentialAudio/BlackHole) and [VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS).
