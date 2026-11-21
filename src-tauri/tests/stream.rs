@@ -87,3 +87,103 @@ fn playback_interpolates_and_drops_old_audio_at_capacity() {
     playback.clear();
     assert_eq!(playback.pop(), 0.0);
 }
+
+#[test]
+fn playback_level_reports_only_peaks_observed_by_the_output_callback() {
+    let playback = Playback::new(24_000);
+    playback.enqueue(&[0xff, 0x7f], &mut playback.resampler());
+    assert_eq!(playback.take_played_peak(), 0.0);
+    playback.report_played_peak(playback.pop().abs());
+    playback.report_played_peak(0.25);
+    assert!(playback.take_played_peak() > 0.99);
+    assert_eq!(playback.take_played_peak(), 0.0);
+}
+
+#[test]
+fn playback_onset_ignores_silence_and_reports_only_the_first_output() {
+    use std::time::{Duration, Instant};
+
+    let playback = Playback::new(24_000);
+    playback.track_onset();
+    let callback = Instant::now();
+    playback.report_onset(0.0, callback);
+    assert_eq!(playback.first_output(), None);
+    let first = callback + Duration::from_millis(20);
+    playback.report_onset(0.02, first);
+    playback.report_onset(0.8, first + Duration::from_millis(20));
+    assert_eq!(playback.first_output(), Some(first));
+    playback.track_onset();
+    assert_eq!(playback.first_output(), None);
+}
+
+#[test]
+fn loopback_encoder_preserves_the_length_at_playback_sample_rate() {
+    let mut encoder = Encoder::with_output_rate(48_000, 24_000, 1_600);
+    for sample in [0.25, -0.25].into_iter().cycle().take(48_000) {
+        encoder.push(sample);
+    }
+    assert_eq!(encoder.flush().len(), 48_000);
+}
+
+#[test]
+fn translated_speech_ducks_original_and_restores_stereo() {
+    use voxa::pcm::DuckingMixer;
+
+    let mut mixer = DuckingMixer::new(48_000);
+    let source = [0.5, -0.25];
+    assert_eq!(mixer.mix(source, 0.0), source);
+    let mut mixed = mixer.mix(source, 0.3);
+    for _ in 0..4_800 {
+        mixed = mixer.mix(source, 0.3);
+    }
+    assert!(mixed[0] < 0.39 && mixed[1] > 0.26);
+    assert!(mixer.mix(source, 0.0)[0] < 0.12);
+    for _ in 0..12_000 {
+        mixer.mix(source, 0.0);
+    }
+    assert!(mixer.mix(source, 0.0)[0] < 0.2);
+    for _ in 0..72_000 {
+        mixer.mix(source, 0.0);
+    }
+    let restored = mixer.mix(source, 0.0);
+    assert!((restored[0] - source[0]).abs() < 0.01);
+    assert!((restored[1] - source[1]).abs() < 0.01);
+}
+
+#[test]
+fn quiet_translation_becomes_clear_against_loud_original_audio() {
+    let mut mixer = voxa::pcm::DuckingMixer::new(48_000);
+    let original = [0.82, -0.82];
+    let voice = 0.07;
+    for _ in 0..1_200 {
+        mixer.mix(original, voice);
+    }
+    let mixed = mixer.mix(original, voice);
+    assert!((mixed[0] - voice).abs() < 0.1);
+    assert!((mixed[1] - voice).abs() < 0.1);
+}
+
+#[test]
+fn original_audio_resamples_stereo_and_recovers_after_underrun() {
+    use voxa::pcm::{OriginalAudio, OriginalReader};
+
+    let audio = OriginalAudio::default();
+    audio.set_rate(44_100);
+    let mut reader = OriginalReader::new(48_000);
+    reader.start_buffer(&audio);
+    assert_eq!(reader.next(&audio), [0.0; 2]);
+    for _ in 0..1_800 {
+        audio.push([0.25, -0.125]);
+    }
+    for _ in 0..1_200 {
+        assert_eq!(reader.next(&audio), [0.25, -0.125]);
+    }
+    for _ in 0..1_200 {
+        reader.next(&audio);
+    }
+    assert_eq!(reader.next(&audio), [0.0; 2]);
+    for _ in 0..1_800 {
+        audio.push([-0.125, 0.25]);
+    }
+    assert_eq!(reader.next(&audio), [-0.125, 0.25]);
+}

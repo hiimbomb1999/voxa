@@ -5,19 +5,58 @@
 #import <CoreAudio/CATapDescription.h>
 #import <unistd.h>
 
-typedef void (*VoxaSamples)(const float *, size_t, void *);
+typedef void (*VoxaSamples)(const float *, const float *, size_t, size_t, uint32_t, void *);
 typedef struct {
     AudioObjectID tap;
     AudioObjectID aggregate;
     AudioDeviceIOProcID io;
     VoxaSamples samples;
     void *context;
+    uint32_t sampleRate;
 } VoxaTap;
 
 static AudioObjectPropertyAddress address(AudioObjectPropertySelector selector) {
     return (AudioObjectPropertyAddress){
         selector, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain
     };
+}
+
+static BOOL isBlackHoleUID(NSString *uid) {
+    return [uid.lowercaseString containsString:@"blackhole"];
+}
+
+bool voxa_uses_blackhole(const char *deviceName) {
+    @autoreleasepool {
+        NSString *name = [NSString stringWithUTF8String:deviceName];
+        AudioObjectPropertyAddress devices = address(kAudioHardwarePropertyDevices);
+        UInt32 size = 0;
+        if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &devices, 0, NULL, &size)) return false;
+        NSMutableData *storage = [NSMutableData dataWithLength:size];
+        if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &devices, 0, NULL, &size, storage.mutableBytes)) return false;
+        const AudioObjectID *ids = storage.bytes;
+        for (size_t index = 0; index < size / sizeof(AudioObjectID); index++) {
+            AudioObjectID device = ids[index];
+            CFStringRef value = NULL;
+            UInt32 length = sizeof(value);
+            AudioObjectPropertyAddress property = address(kAudioObjectPropertyName);
+            if (AudioObjectGetPropertyData(device, &property, 0, NULL, &length, &value)) continue;
+            if (![CFBridgingRelease(value) isEqualToString:name]) continue;
+            property = address(kAudioDevicePropertyDeviceUID);
+            value = NULL;
+            length = sizeof(value);
+            if (!AudioObjectGetPropertyData(device, &property, 0, NULL, &length, &value)
+                && isBlackHoleUID(CFBridgingRelease(value))) return true;
+            property = address(kAudioAggregateDevicePropertyFullSubDeviceList);
+            CFArrayRef subdevices = NULL;
+            length = sizeof(subdevices);
+            if (!AudioObjectGetPropertyData(device, &property, 0, NULL, &length, &subdevices)) {
+                for (NSString *uid in CFBridgingRelease(subdevices)) {
+                    if (isBlackHoleUID(uid)) return true;
+                }
+            }
+        }
+        return false;
+    }
 }
 
 static NSArray<NSDictionary *> *processes(void) {
@@ -97,10 +136,23 @@ static OSStatus readAudio(
 ) {
     (void)device; (void)now; (void)inTime; (void)output; (void)outTime;
     VoxaTap *state = context;
-    if (input && input->mNumberBuffers > 0 && input->mBuffers[0].mData) {
-        const AudioBuffer buffer = input->mBuffers[0];
-        state->samples(buffer.mData, buffer.mDataByteSize / sizeof(float), state->context);
+    if (!input || !input->mNumberBuffers) return noErr;
+
+    const AudioBuffer first = input->mBuffers[0];
+    const size_t stride = first.mNumberChannels;
+    if (!first.mData || !stride || stride > 2) return noErr;
+    const float *left = first.mData;
+    const float *right = stride == 2 ? left + 1 : left;
+    size_t frames = first.mDataByteSize / (sizeof(float) * stride);
+    if (stride == 1 && input->mNumberBuffers > 1) {
+        const AudioBuffer second = input->mBuffers[1];
+        if (second.mNumberChannels == 1 && second.mData) {
+            right = second.mData;
+            size_t rightFrames = second.mDataByteSize / sizeof(float);
+            if (rightFrames < frames) frames = rightFrames;
+        }
     }
+    if (frames) state->samples(left, right, frames, stride, state->sampleRate, state->context);
     return noErr;
 }
 
@@ -115,7 +167,7 @@ void voxa_stop_tap(VoxaTap *state) {
     free(state);
 }
 
-VoxaTap *voxa_start_tap(const char *source, VoxaSamples samples, void *context, double *sampleRate, int32_t *failure) {
+VoxaTap *voxa_start_tap(const char *source, bool monitor, VoxaSamples samples, void *context, double *sampleRate, int32_t *failure) {
     @autoreleasepool {
         NSMutableArray<NSNumber *> *selected = [NSMutableArray array];
         CATapDescription *desc = nil;
@@ -132,7 +184,8 @@ VoxaTap *voxa_start_tap(const char *source, VoxaSamples samples, void *context, 
                 *failure = -1;
                 return NULL;
             }
-            desc = [[CATapDescription alloc] initMonoMixdownOfProcesses:selected];
+            desc = monitor ? [[CATapDescription alloc] initStereoMixdownOfProcesses:selected]
+                           : [[CATapDescription alloc] initMonoMixdownOfProcesses:selected];
         } else {
             AudioObjectPropertyAddress selector = address(kAudioHardwarePropertyTranslatePIDToProcessObject);
             pid_t pid = getpid();
@@ -144,11 +197,14 @@ VoxaTap *voxa_start_tap(const char *source, VoxaSamples samples, void *context, 
                 return NULL;
             }
             [selected addObject:@(ownID)];
-            desc = [[CATapDescription alloc] initMonoGlobalTapButExcludeProcesses:selected];
+            desc = monitor ? [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:selected]
+                           : [[CATapDescription alloc] initMonoGlobalTapButExcludeProcesses:selected];
         }
         desc.name = @"Voxa Translation Tap";
         desc.privateTap = YES;
-        desc.muteBehavior = CATapUnmuted;
+        // The monitor already replays the original. Keep its direct route muted
+        // for the lifetime of this tap, independently of the tap reader cadence.
+        desc.muteBehavior = monitor ? CATapMuted : CATapUnmuted;
 
         VoxaTap *state = calloc(1, sizeof(*state));
         if (!state) {
@@ -163,7 +219,8 @@ VoxaTap *voxa_start_tap(const char *source, VoxaSamples samples, void *context, 
         AudioObjectPropertyAddress selector = address(kAudioTapPropertyFormat);
         if (!status) status = AudioObjectGetPropertyData(state->tap, &selector, 0, NULL, &size, &format);
         if (!status && (format.mFormatID != kAudioFormatLinearPCM || format.mBitsPerChannel != 32 ||
-                        !(format.mFormatFlags & kAudioFormatFlagIsFloat) || format.mChannelsPerFrame != 1 ||
+                        !(format.mFormatFlags & kAudioFormatFlagIsFloat) || format.mChannelsPerFrame < 1 ||
+                        format.mChannelsPerFrame > 2 ||
                         format.mSampleRate < 16000 || format.mSampleRate > 192000)) {
             status = -2;
         }
@@ -182,6 +239,7 @@ VoxaTap *voxa_start_tap(const char *source, VoxaSamples samples, void *context, 
             };
             status = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggregate, &state->aggregate);
         }
+        state->sampleRate = (uint32_t)(format.mSampleRate + 0.5);
         if (!status) status = AudioDeviceCreateIOProcID(state->aggregate, readAudio, state, &state->io);
         if (!status) status = AudioDeviceStart(state->aggregate, state->io);
         if (status) {

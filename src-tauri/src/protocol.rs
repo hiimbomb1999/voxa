@@ -18,7 +18,9 @@ pub enum Event {
         finished: bool,
     },
     Audio(Vec<u8>),
+    ProvisionalCaptions([String; 2]),
     Interrupted,
+    GenerationComplete,
     TurnComplete,
 }
 
@@ -101,6 +103,9 @@ pub fn parse(response: &Value) -> Vec<Event> {
                     }
                 }
             }
+        }
+        if content["generationComplete"].as_bool() == Some(true) {
+            events.push(Event::GenerationComplete);
         }
         if content["turnComplete"].as_bool() == Some(true) {
             events.push(Event::TurnComplete);

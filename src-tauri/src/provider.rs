@@ -6,7 +6,9 @@ use std::time::Duration;
 use tokio::{net::TcpStream, time::timeout};
 use tokio_tungstenite::{
     connect_async_with_config,
-    tungstenite::{client::IntoClientRequest, protocol::WebSocketConfig, Message},
+    tungstenite::{
+        client::IntoClientRequest, handshake::client::Request, protocol::WebSocketConfig, Message,
+    },
     MaybeTlsStream, WebSocketStream,
 };
 
@@ -24,19 +26,27 @@ pub fn load_key() -> Result<Option<String>> {
             })?))
         }
         Err(error) if error.code() == -25300 => Ok(None),
-        Err(_) => Err(anyhow!("Không đọc được API key từ macOS Keychain.")),
+        Err(error) if matches!(error.code(), -128 | -25293 | -25308) => Err(anyhow!(
+            "macOS chưa cho Voxa đọc API key. Vào Cài đặt → Kiểm tra kết nối Live và cho phép nếu Keychain hỏi."
+        )),
+        Err(error) => Err(anyhow!("Không đọc được API key từ macOS Keychain ({}).", error.code())),
     }
 }
 
-pub fn save_key(key: &str) -> Result<()> {
+fn checked_api_key(key: &str) -> Result<&str> {
     let key = key.trim();
     if !(16..=256).contains(&key.len())
         || !key
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         bail!("API key Gemini không đúng định dạng.");
     }
+    Ok(key)
+}
+
+pub fn save_key(key: &str) -> Result<()> {
+    let key = checked_api_key(key)?;
     security_framework::passwords::set_generic_password(KEYCHAIN, "gemini-api-key", key.as_bytes())
         .map_err(|_| anyhow!("Không ghi được API key vào macOS Keychain."))
 }
@@ -50,16 +60,15 @@ pub fn forget_key() -> Result<()> {
     }
 }
 
-pub async fn connect(key: &str) -> Result<Socket> {
-    if !key
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
-        bail!("API key Gemini không đúng định dạng.");
-    }
-    let request = format!("{LIVE}?key={key}")
+fn live_request(key: &str) -> Result<Request> {
+    let key = checked_api_key(key)?;
+    format!("{LIVE}?key={key}")
         .into_client_request()
-        .map_err(|_| anyhow!("Không tạo được yêu cầu Gemini Live."))?;
+        .map_err(|_| anyhow!("Không tạo được yêu cầu Gemini Live."))
+}
+
+pub async fn connect(key: &str) -> Result<Socket> {
+    let request = live_request(key)?;
     let config = WebSocketConfig::default().max_message_size(Some(2 * 1024 * 1024));
     match timeout(
         Duration::from_secs(10),
@@ -94,6 +103,17 @@ pub async fn send(socket: &mut Socket, json: Value) -> Result<()> {
     }
 }
 
+#[derive(Debug)]
+pub struct LivePolicyClose;
+
+impl std::fmt::Display for LivePolicyClose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Gemini đã đóng kết nối Live (1008).")
+    }
+}
+
+impl std::error::Error for LivePolicyClose {}
+
 pub async fn receive(socket: &mut Socket) -> Result<Value> {
     loop {
         let bytes = match socket.next().await {
@@ -109,7 +129,7 @@ pub async fn receive(socket: &mut Socket) -> Result<Value> {
             Some(Ok(Message::Pong(_))) => return Ok(Value::Null),
             Some(Ok(Message::Frame(_))) => continue,
             Some(Ok(Message::Close(frame))) => match frame.map(|frame| u16::from(frame.code)) {
-                Some(1008) => bail!("Gemini từ chối cấu hình hoặc quyền dùng model Live (1008)."),
+                Some(1008) => return Err(LivePolicyClose.into()),
                 Some(code) => bail!("Gemini đã đóng kết nối ({code})."),
                 None => bail!("Gemini đã đóng kết nối."),
             },
@@ -124,6 +144,9 @@ fn parse_message(bytes: &[u8]) -> Result<Value> {
         .map_err(|_| anyhow!("Gemini trả về sự kiện Live không hợp lệ."))?;
     if let Some(error) = value.get("error") {
         let code = error["code"].as_u64().unwrap_or(0);
+        if code == 1008 {
+            return Err(LivePolicyClose.into());
+        }
         bail!("Gemini Live trả về lỗi ({code}).");
     }
     Ok(value)
@@ -135,6 +158,17 @@ pub fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
+#[derive(Debug)]
+pub struct InteractionRateLimit;
+
+impl std::fmt::Display for InteractionRateLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Gemini đã đạt giới hạn sử dụng (429).")
+    }
+}
+
+impl std::error::Error for InteractionRateLimit {}
+
 async fn interaction(client: &reqwest::Client, key: &str, body: Value) -> Result<Value> {
     let response = client
         .post(INTERACTIONS)
@@ -143,6 +177,9 @@ async fn interaction(client: &reqwest::Client, key: &str, body: Value) -> Result
         .send()
         .await
         .map_err(|_| anyhow!("Không gửi được yêu cầu tới Gemini."))?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(InteractionRateLimit.into());
+    }
     if !response.status().is_success() {
         bail!("Gemini trả về lỗi ({}).", response.status().as_u16());
     }
@@ -204,4 +241,53 @@ fn output<'a>(response: &'a Value, kind: &str) -> Option<&'a Value> {
         .filter_map(|step| step["content"].as_array())
         .flat_map(|content| content.iter())
         .find(|item| item["type"] == kind)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const AUTH_KEY: &str = "AQ.synthetic-key_for_local_tests";
+    const STANDARD_KEY: &str = "AIza-synthetic-key_for_local_tests";
+
+    #[test]
+    fn policy_error_keeps_the_close_code_and_hides_the_server_message() {
+        let error =
+            parse_message(br#"{"error":{"code":1008,"message":"private details"}}"#).unwrap_err();
+        assert!(error.is::<LivePolicyClose>());
+        assert_eq!(error.to_string(), "Gemini đã đóng kết nối Live (1008).");
+    }
+
+    #[test]
+    fn accepts_ai_studio_authorization_and_standard_keys() {
+        let pasted = format!(" {AUTH_KEY}\n");
+        assert_eq!(checked_api_key(&pasted).unwrap(), AUTH_KEY);
+        assert_eq!(checked_api_key(STANDARD_KEY).unwrap(), STANDARD_KEY);
+    }
+
+    #[test]
+    fn live_request_preserves_the_full_authorization_key() {
+        let request = live_request(AUTH_KEY).unwrap();
+        assert_eq!(
+            request.uri().host(),
+            Some("generativelanguage.googleapis.com")
+        );
+        assert_eq!(
+            request.uri().query(),
+            Some("key=AQ.synthetic-key_for_local_tests")
+        );
+    }
+
+    #[test]
+    fn rejects_blank_keys_and_request_delimiters() {
+        for input in [
+            "  ",
+            "AQ.synthetic key_for_local_tests",
+            "AQ.synthetic-key&extra=value",
+            "AQ.synthetic-key\r\nheader",
+        ] {
+            assert!(checked_api_key(input).is_err());
+            assert!(live_request(input).is_err());
+        }
+    }
 }

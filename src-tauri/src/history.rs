@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::{
@@ -141,9 +141,14 @@ impl History {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn delete(&self, id: i64) -> Result<()> {
-        self.connection()?
-            .execute("DELETE FROM sessions WHERE id=?", [id])?;
+    pub fn delete(&self, id: i64, started_at: i64) -> Result<()> {
+        let removed = self.connection()?.execute(
+            "DELETE FROM sessions WHERE id=? AND started_at=?",
+            params![id, started_at],
+        )?;
+        if removed == 0 {
+            bail!("Phiên đã thay đổi hoặc đã bị xóa. Làm mới lịch sử rồi thử lại.");
+        }
         Ok(())
     }
 }
@@ -211,6 +216,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stale_row_cannot_delete_a_new_session_with_the_same_id() {
+        let history = History::from_connection(Connection::open_in_memory().unwrap()).unwrap();
+        let session = history.create("New session").unwrap();
+        assert!(history.delete(session.id, session.started_at - 1).is_err());
+        assert!(history.delete(session.id, session.started_at).is_ok());
+    }
+
+    #[test]
     fn captions_are_persisted_and_rendered_with_subtitle_timing() {
         let history = History::from_connection(Connection::open_in_memory().unwrap()).unwrap();
         let session = history.create("Test").unwrap();
@@ -233,7 +246,7 @@ mod tests {
             render(&entries, "srt").unwrap(),
             "1\n00:00:01,250 --> 00:00:02,500\nHello\n\n"
         );
-        history.delete(session.id).unwrap();
+        history.delete(session.id, session.started_at).unwrap();
         assert!(history.entries(session.id).unwrap().is_empty());
     }
 }

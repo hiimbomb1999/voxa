@@ -1,7 +1,10 @@
 mod audio;
 mod history;
+mod meeting;
 mod provider;
 mod session;
+mod soniox;
+mod vieneu;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -25,10 +28,89 @@ fn devices() -> Result<audio::Devices, String> {
 }
 
 #[tauri::command]
-async fn test_blackhole(output: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || visible_error(audio::test_blackhole(&output)))
-        .await
-        .map_err(|_| "Không thể chạy thử BlackHole.".to_owned())?
+fn local_voices(app: AppHandle) -> Result<Vec<(String, String)>, String> {
+    visible_error(vieneu::voices(&app))
+}
+
+#[tauri::command]
+async fn test_voice(
+    app: AppHandle,
+    state: tauri::State<'_, State>,
+    output: Option<String>,
+    meeting: bool,
+    voice: Option<String>,
+    language: String,
+) -> Result<(), String> {
+    let test = visible_error(state.begin_audio_test())?;
+    let audio = if let Some(voice) = voice {
+        visible_error(vieneu::validate(&app, &voice))?;
+        let sample = if meeting || language == "en" {
+            vieneu::SAMPLE_EN
+        } else {
+            vieneu::SAMPLE_VI
+        };
+        let mut engine = visible_error(vieneu::Engine::start(&app).await)?;
+        visible_error(engine.request(sample, &voice).await)?;
+        let mut audio = Vec::new();
+        while let Some(frame) = visible_error(engine.read().await)? {
+            audio.extend(frame);
+        }
+        audio
+    } else if meeting {
+        audio::test_tone()
+    } else {
+        return Err("Chọn một giọng VieNeu-TTS để nghe thử.".to_owned());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let _test = test;
+        visible_error(audio::play_test(output.as_deref(), meeting, &audio))
+    })
+    .await
+    .map_err(|_| "Không thể phát âm thử.".to_owned())?
+}
+
+#[tauri::command]
+async fn test_microphone(
+    app: AppHandle,
+    state: tauri::State<'_, State>,
+    microphone: Option<String>,
+) -> Result<audio::MicTest, String> {
+    let test = visible_error(state.begin_audio_test())?;
+    visible_error(audio::microphone_permission().await)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _test = test;
+        visible_error(audio::test_microphone(microphone.as_deref(), |level| {
+            let _ = app.emit("voxa:microphone-test", level);
+        }))
+    })
+    .await
+    .map_err(|_| "Không thể kiểm tra micro.".to_owned())?
+}
+
+#[tauri::command]
+async fn test_listen_ducking(
+    state: tauri::State<'_, State>,
+    source: Option<String>,
+    output: Option<String>,
+) -> Result<audio::DuckingTest, String> {
+    let _test = visible_error(state.begin_audio_test())?;
+    visible_error(audio::test_ducking(source, output).await)
+}
+
+#[tauri::command]
+async fn test_blackhole_loopback(
+    state: tauri::State<'_, State>,
+    device: String,
+    speaker: Option<String>,
+) -> Result<audio::LoopbackTest, String> {
+    let test = visible_error(state.begin_audio_test())?;
+    visible_error(audio::microphone_permission().await)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _test = test;
+        visible_error(audio::test_blackhole_loopback(&device, speaker.as_deref()))
+    })
+    .await
+    .map_err(|_| "Không thể hoàn tất phép thử BlackHole.".to_owned())?
 }
 
 #[tauri::command]
@@ -68,6 +150,45 @@ fn press(state: tauri::State<State>, lane: Lane, pressed: bool) -> bool {
 #[tauri::command]
 fn set_listen_sound(state: tauri::State<State>, enabled: bool) {
     state.set_sound(enabled);
+}
+
+#[tauri::command]
+fn set_quiet_listen(state: tauri::State<State>, enabled: bool) {
+    state.set_quiet_listen(enabled);
+}
+
+#[tauri::command]
+fn soniox_key_status() -> Result<bool, String> {
+    visible_error(soniox::load_key().map(|key| key.is_some()))
+}
+
+#[tauri::command]
+fn store_soniox_key(key: String) -> Result<(), String> {
+    visible_error(soniox::store_key(&key))
+}
+
+#[tauri::command]
+fn forget_soniox_key() -> Result<(), String> {
+    visible_error(soniox::forget_key())
+}
+
+#[tauri::command]
+async fn check_soniox() -> Result<(), String> {
+    let key = visible_error(soniox::load_key())?
+        .ok_or_else(|| "Nhập Soniox API key trước khi kiểm tra.".to_owned())?;
+    visible_error(soniox::check_key(&key).await)
+}
+
+#[tauri::command]
+fn soniox_languages() -> Vec<&'static str> {
+    soniox::languages().collect()
+}
+
+#[tauri::command]
+async fn check_gemini_live() -> Result<(), String> {
+    let key = visible_error(provider::load_key())?
+        .ok_or_else(|| "Nhập Gemini API key trước khi kiểm tra.".to_owned())?;
+    visible_error(session::check_live(&key).await)
 }
 
 #[tauri::command]
@@ -114,11 +235,8 @@ fn history_entries(state: tauri::State<State>, id: i64) -> Result<Vec<history::E
 }
 
 #[tauri::command]
-fn delete_session(state: tauri::State<State>, id: i64) -> Result<(), String> {
-    if state.is_saved_active(id) {
-        return Err("Hãy dừng phiên đang chạy trước khi xóa.".to_owned());
-    }
-    visible_error(state.history.delete(id))
+fn delete_session(state: tauri::State<State>, id: i64, started_at: i64) -> Result<(), String> {
+    visible_error(state.delete_saved(id, started_at))
 }
 
 #[derive(Serialize)]
@@ -212,7 +330,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             devices,
-            test_blackhole,
+            local_voices,
+            test_voice,
+            test_microphone,
+            test_blackhole_loopback,
+            test_listen_ducking,
             key_status,
             store_key,
             forget_key,
@@ -220,6 +342,13 @@ fn main() {
             stop,
             press,
             set_listen_sound,
+            set_quiet_listen,
+            check_gemini_live,
+            soniox_key_status,
+            store_soniox_key,
+            forget_soniox_key,
+            check_soniox,
+            soniox_languages,
             overlay,
             history_list,
             history_entries,
