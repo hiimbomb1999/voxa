@@ -9,7 +9,7 @@ use futures_util::{stream::SplitStream, Sink, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
-    future::Future,
+    future::{pending, Future},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
         Arc, Mutex,
@@ -561,11 +561,16 @@ async fn run(
             Some(voice) => {
                 if let Some(name) = voice.strip_prefix("vieneu:") {
                     status(app, worker.lane, "opening", "Đang nạp giọng VieNeu-TTS…");
-                    let engine = tokio::select! {
+                    match tokio::select! {
                         _ = worker.cancelled.cancelled() => break,
-                        engine = vieneu::Engine::start(app) => engine?,
-                    };
-                    Some(Voice::Local(Box::new(engine), name.to_owned()))
+                        engine = vieneu::Engine::start(app) => engine,
+                    } {
+                        Ok(engine) => Some(Voice::Local(Box::new(engine), name.to_owned())),
+                        Err(error) => {
+                            worker.disable_voice(app, &error);
+                            None
+                        }
+                    }
                 } else {
                     Some(Voice::Gemini(
                         provider::client()?,
@@ -611,9 +616,26 @@ async fn run(
                     service,
                     worker,
                 };
+                let local_voice = matches!(voice, Some(Voice::Local(..)));
+                let (voice_queue, synthesizer) = match voice {
+                    Some(voice) => {
+                        let early_phrases = worker.lane == Lane::Listen
+                            && (local_voice || service == SpeechProvider::Soniox);
+                        let (queue, receiver) = VoiceQueue::new(worker.lane, early_phrases);
+                        (Some(queue), Some((voice, receiver)))
+                    }
+                    None => (None, None),
+                };
+                let synthesize = async {
+                    if let Some((voice, receiver)) = synthesizer {
+                        voice_playback(app, worker, voice, &io.playback, receiver).await;
+                    }
+                    pending::<Result<()>>().await
+                };
                 let result = tokio::select! {
-                    result = stream(&mut live, worker, &io, &mut captions, voice) => result,
+                    result = stream(&mut live, worker, &io, &mut captions, voice_queue.as_ref(), local_voice) => result,
                     result = write_live(writer, outgoing, service, worker.lane, &worker.health.dropped_input_pcm) => result,
+                    result = synthesize => result,
                 };
                 if started.elapsed() >= Duration::from_secs(10) || result.is_ok() {
                     attempts = 0;
@@ -859,14 +881,13 @@ async fn stream(
     worker: &Arc<Worker>,
     io: &AudioIo,
     captions: &mut Captions<'_>,
-    voice: Option<Voice>,
+    voice_queue: Option<&VoiceQueue>,
+    local_voice: bool,
 ) -> Result<()> {
     let talk = worker.lane == Lane::Talk;
     let listen = worker.lane == Lane::Listen;
-    let local_voice = matches!(voice, Some(Voice::Local(..)));
     let service = socket.service;
     let provider_name = service.label();
-    let early_phrases = listen && (local_voice || service == SpeechProvider::Soniox);
     let keepalive = Duration::from_secs(if service == SpeechProvider::Soniox {
         8
     } else {
@@ -905,19 +926,8 @@ async fn stream(
     let mut turn_sent = false;
     let mut rotate_at = None;
 
-    let voice_worker = voice.map(|voice| {
-        let (tx, rx) = VoiceQueue::new(worker.lane, early_phrases);
-        let task = tokio::spawn(voice_playback(
-            captions.app.clone(),
-            worker.clone(),
-            voice,
-            io.playback.clone(),
-            rx,
-        ));
-        (tx, AbortOnDrop(task))
-    });
-    let voice_tx = || worker.active_voice(voice_worker.as_ref().map(|(tx, _task)| tx));
-    let result = loop {
+    let voice_tx = || worker.active_voice(voice_queue);
+    loop {
         tokio::select! {
             _ = worker.cancelled.cancelled() => {
                 let tail = if listen { encoder.flush() } else { Vec::new() };
@@ -996,7 +1006,7 @@ async fn stream(
                         {
                             if first_output >= release && first_output <= now.into_std() {
                                 let measurement = MeetingLatency::new(
-                                    service, local_voice, release.into(), first_output.into(), captions.first_voice_text,
+                                    service, local_voice && voice_tx().is_some(), release.into(), first_output.into(), captions.first_voice_text,
                                 );
                                 let _ = captions.app.emit("voxa:meeting-latency", measurement);
                                 latency_reported = true;
@@ -1182,9 +1192,7 @@ async fn stream(
                 }
             }
         }
-    };
-    drop(voice_worker);
-    result
+    }
 }
 
 fn append_live_pcm(pending: &mut VecDeque<u8>, incoming: &[u8]) -> bool {
@@ -1277,12 +1285,19 @@ impl Worker {
         selected.filter(|_| !self.tts_unavailable.load(Relaxed))
     }
 
-    fn fall_back_from_tts(&self, error: &anyhow::Error) -> bool {
-        if self.lane != Lane::Listen || !error.is::<provider::InteractionRateLimit>() {
-            return false;
-        }
+    fn disable_voice(&self, app: &AppHandle, error: &anyhow::Error) {
         self.tts_unavailable.store(true, Relaxed);
-        true
+        let detail = match self.provider {
+            SpeechProvider::Gemini => "Voxa sẽ dùng giọng Gemini Trực tiếp cho phần tiếp theo.",
+            SpeechProvider::Soniox => "Phiên này tiếp tục ở chế độ chỉ phụ đề.",
+        };
+        let _ = app.emit(
+            "voxa:notice",
+            format!(
+                "{} · Giọng đọc: {error} {detail}",
+                history::lane_label(self.lane.label())
+            ),
+        );
     }
 
     fn wants_voice(&self) -> bool {
@@ -1297,14 +1312,6 @@ impl Worker {
     }
 }
 
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 enum Voice {
     Gemini(reqwest::Client, String, String),
     Local(Box<vieneu::Engine>, String),
@@ -1312,10 +1319,10 @@ enum Voice {
 }
 
 async fn voice_playback(
-    app: AppHandle,
-    worker: Arc<Worker>,
+    app: &AppHandle,
+    worker: &Worker,
     mut voice: Voice,
-    playback: Arc<Playback>,
+    playback: &Playback,
     mut queue: mpsc::Receiver<VoiceJob>,
 ) {
     let lane = worker.lane;
@@ -1327,11 +1334,20 @@ async fn voice_playback(
         if !worker.can_play() {
             continue;
         }
+        if lane == Lane::Listen {
+            worker
+                .health
+                .peak_voice_wait_ms
+                .fetch_max(job.queued_at.elapsed().as_millis() as u64, Relaxed);
+        }
         let result = if job.expired(lane, Instant::now()) {
             Ok(false)
         } else {
-            play_voice(&mut voice, &job, &playback, &worker).await
+            play_voice(&mut voice, &job, playback, worker).await
         };
+        if lane == Lane::Listen && !matches!(result, Ok(true)) {
+            worker.health.skipped_voice_jobs.fetch_add(1, Relaxed);
+        }
         if matches!(result, Ok(false)) && !catchup_reported {
             catchup_reported = true;
             let _ = app.emit(
@@ -1340,29 +1356,23 @@ async fn voice_playback(
             );
         }
         if let Err(error) = result {
-            if worker.fall_back_from_tts(&error) {
-                let _ = app.emit(
-                    "voxa:notice",
-                    "Gemini TTS đã đạt giới hạn (429). Chiều nghe đã chuyển sang giọng Trực tiếp cho phiên này.",
-                );
-                break;
-            }
-            if matches!(voice, Voice::Soniox(..)) && soniox::voice_access_denied(&error) {
-                worker.tts_unavailable.store(true, Relaxed);
-                let _ = app.emit(
-                    "voxa:notice",
-                    format!("Giọng Soniox · {error} Phụ đề vẫn tiếp tục trong phiên này."),
-                );
+            if matches!(voice, Voice::Local(..))
+                || error.is::<provider::InteractionRateLimit>()
+                || soniox::voice_access_denied(&error)
+            {
+                worker.disable_voice(app, &error);
+                if lane == Lane::Listen {
+                    worker
+                        .health
+                        .skipped_voice_jobs
+                        .fetch_add(queue.len() as u64, Relaxed);
+                }
                 break;
             }
             let _ = app.emit(
                 "voxa:notice",
                 format!("{} · Giọng đọc: {error}", history::lane_label(lane.label())),
             );
-            if matches!(voice, Voice::Local(..)) {
-                app.state::<State>().stop(lane);
-                break;
-            }
         }
     }
 }
@@ -1404,26 +1414,27 @@ async fn play_voice(
     let mut resampler = playback.resampler();
     match voice {
         Voice::Local(engine, name) => {
-            engine.request(text, name).await?;
-            let Some(first) = engine.read().await? else {
-                return Ok(true);
+            let first = await_first_voice(job, worker.lane, async {
+                voice_gap(worker.lane, engine.request(text, name)).await?;
+                voice_gap(worker.lane, engine.read()).await
+            })
+            .await?
+            .ok_or_else(|| anyhow!("VieNeu-TTS không kịp đọc đoạn hiện tại."))?;
+            let mut play = match first {
+                Some(pcm) => queue_voice_pcm(&pcm, playback, worker, &mut resampler).await?,
+                None => return Ok(true),
             };
-            let expired = job.expired(worker.lane, Instant::now());
-            let mut play =
-                !expired && queue_voice_pcm(&first, playback, worker, &mut resampler).await;
-            // Finish reading the response even if it became stale, so VieNeu
-            // starts the next request at a response boundary.
-            while let Some(pcm) = engine.read().await? {
+            // Drain this response before using the shared sidecar again.
+            while let Some(pcm) = voice_gap(worker.lane, engine.read()).await? {
                 if play {
-                    play = queue_voice_pcm(&pcm, playback, worker, &mut resampler).await;
+                    play = queue_voice_pcm(&pcm, playback, worker, &mut resampler).await?;
                 }
             }
-            return Ok(!expired);
         }
         Voice::Soniox(engine) => {
             let first = await_first_voice(job, worker.lane, async {
                 let mut socket = engine.start(text).await?;
-                let pcm = soniox::read_voice(&mut socket).await?;
+                let pcm = voice_gap(worker.lane, soniox::read_voice(&mut socket)).await?;
                 Ok((socket, pcm))
             })
             .await?;
@@ -1431,10 +1442,12 @@ async fn play_voice(
                 return Ok(false);
             };
             if let Some(first) = first {
-                let mut play = queue_voice_pcm(&first, playback, worker, &mut resampler).await;
-                while let Some(pcm) = soniox::read_voice(&mut socket).await? {
+                let mut play = queue_voice_pcm(&first, playback, worker, &mut resampler).await?;
+                while let Some(pcm) =
+                    voice_gap(worker.lane, soniox::read_voice(&mut socket)).await?
+                {
                     if play {
-                        play = queue_voice_pcm(&pcm, playback, worker, &mut resampler).await;
+                        play = queue_voice_pcm(&pcm, playback, worker, &mut resampler).await?;
                     }
                 }
             }
@@ -1447,10 +1460,17 @@ async fn play_voice(
             else {
                 return Ok(false);
             };
-            queue_voice_pcm(&pcm, playback, worker, &mut resampler).await;
+            queue_voice_pcm(&pcm, playback, worker, &mut resampler).await?;
         }
     }
     Ok(true)
+}
+
+async fn voice_gap<T>(lane: Lane, read: impl Future<Output = Result<T>>) -> Result<T> {
+    let limit = if lane == Lane::Listen { 1_800 } else { 4_000 };
+    timeout(Duration::from_millis(limit), read)
+        .await
+        .map_err(|_| anyhow!("Giọng đọc ngừng gửi âm thanh giữa lượt."))?
 }
 
 async fn queue_voice_pcm(
@@ -1458,17 +1478,21 @@ async fn queue_voice_pcm(
     playback: &Playback,
     worker: &Worker,
     resampler: &mut PlaybackResampler,
-) -> bool {
+) -> Result<bool> {
     for chunk in pcm.chunks(4_800) {
-        while playback.buffered_millis() >= 180 {
-            sleep(Duration::from_millis(20)).await;
-        }
+        timeout(Duration::from_millis(500), async {
+            while worker.can_play() && playback.buffered_millis() >= 180 {
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("Thiết bị phát chưa xử lý kịp âm thanh."))?;
         if !worker.can_play() {
-            return false;
+            return Ok(false);
         }
         playback.enqueue(chunk, resampler);
     }
-    true
+    Ok(true)
 }
 
 fn live_phrase_end(text: &str, allow_terminal_end: bool) -> Option<usize> {
@@ -1639,14 +1663,16 @@ impl<'a> Captions<'a> {
                 if !text.is_empty() {
                     if let Some(queued) = queue.submit(text.to_owned()) {
                         self.first_voice_text.get_or_insert(queued);
-                    } else if self.worker.lane == Lane::Listen
-                        && !self.worker.tts_unavailable.load(Relaxed)
-                        && !queue.overflow_reported.swap(true, Relaxed)
-                    {
-                        let _ = self.app.emit(
-                            "voxa:notice",
-                            "Giọng đọc đang chờ quá nhiều câu. Một số đoạn mới chỉ hiện trong phụ đề.",
-                        );
+                    } else {
+                        if self.worker.lane == Lane::Listen {
+                            self.worker.health.skipped_voice_jobs.fetch_add(1, Relaxed);
+                        }
+                        if !queue.overflow_reported.swap(true, Relaxed) {
+                            let _ = self.app.emit(
+                                "voxa:notice",
+                                "Giọng đọc đang chờ quá nhiều câu. Một số đoạn mới chỉ hiện trong phụ đề.",
+                            );
+                        }
                     }
                 }
             }
@@ -1845,34 +1871,18 @@ mod listen_latency_tests {
 mod voice_fallback_tests {
     use super::*;
 
-    #[test]
-    fn a_tts_rate_limit_restores_native_audio_for_the_rest_of_the_listen_session() {
-        let worker = Worker {
-            lane: Lane::Listen,
-            provider: SpeechProvider::Gemini,
-            cancelled: CancellationToken::new(),
-            revoked: CancellationToken::new(),
-            finished: CancellationToken::new(),
-            capture: Arc::new(Capture::new(false)),
-            sound: Arc::new(AtomicBool::new(true)),
-            tts_unavailable: AtomicBool::new(false),
-            health: ListenHealth::default(),
-            meeting_turn: Arc::new(PushToTalk::default()),
-            quiet_listen_during_talk: Arc::new(AtomicBool::new(false)),
-            mic_sensitivity: MicSensitivity::default(),
-            session: None,
-            started_at: 0,
-        };
-        assert_eq!(worker.active_voice(Some("Kore")), Some("Kore"));
-        assert!(!worker.fall_back_from_tts(&anyhow!("Some unrelated error (429)")));
-        assert_eq!(worker.active_voice(Some("Kore")), Some("Kore"));
-
-        let (queue, _receiver) = VoiceQueue::new(Lane::Listen, false);
-        assert!(worker.active_voice(Some(&queue)).is_some());
-        assert!(worker.fall_back_from_tts(&provider::InteractionRateLimit.into()));
-        assert!(worker.active_voice(Some(&queue)).is_none());
-        assert!(worker.wants_voice());
-        assert_eq!(worker.active_voice(Some("Kore")), None);
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_voice_yields_to_the_next_phrase() {
+        let start = Instant::now();
+        let stalled = voice_gap(Lane::Listen, pending::<Result<Vec<u8>>>()).await;
+        assert!(stalled.is_err());
+        assert_eq!(start.elapsed(), Duration::from_millis(1_800));
+        assert_eq!(
+            voice_gap(Lane::Listen, async { Ok(vec![1, 2]) })
+                .await
+                .unwrap(),
+            vec![1, 2]
+        );
     }
 }
 
