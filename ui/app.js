@@ -520,6 +520,9 @@ function updateControls() {
 
 function applyStatus({ lane, status, detail }) {
   statuses[lane] = status;
+  if (status === "stopped" || status === "error") {
+    if (lane !== "assistant") message(lane + "-voice-mode", "");
+  }
   if (lane === "listen" && status === "ready") message("listen-route", `Phát qua ${detail}`);
   const label = get(lane + "-status");
   const card = get(lane + "-card");
@@ -838,6 +841,10 @@ async function initialize() {
     api.event.listen("voxa:listen-health", ({ payload }) => showListenHealth(payload)),
     api.event.listen("voxa:meeting-latency", ({ payload }) => showMeetingLatency(payload)),
     api.event.listen("voxa:signal", ({ payload }) => updateLevel(payload.lane, payload.peak, payload.outputPeak)),
+    api.event.listen("voxa:voice-mode", ({ payload: { lane, mode } }) => {
+      if (lane !== "listen" && lane !== "talk") return;
+      message(lane + "-voice-mode", mode === "native" ? "Đang dùng giọng Gemini Trực tiếp dự phòng." : "Giọng đọc tạm ngừng · Chỉ phụ đề.");
+    }),
     api.event.listen("voxa:notice", (event) => message("message", event.payload)),
     api.event.listen("voxa:overlay-ready", sendOverlay),
     api.event.listen("voxa:overlay-closed", () => get("overlay").setAttribute("aria-pressed", "false")),

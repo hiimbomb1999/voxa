@@ -384,12 +384,14 @@ impl State {
             if lane == Lane::Talk {
                 worker.meeting_turn.reset();
             }
-            app.state::<State>().active.lock().unwrap()[lane.index()] = None;
+            let state = app.state::<State>();
+            let mut active = state.active.lock().unwrap();
             if let Err(error) = result {
                 status(&app, lane, "error", &error.to_string());
             } else {
                 status(&app, lane, "stopped", "");
             }
+            active[lane.index()] = None;
             worker.finished.cancel();
         });
         Ok(())
@@ -406,11 +408,7 @@ impl State {
             slots
                 .iter()
                 .flatten()
-                .filter(|worker| worker.provider == provider)
-                .map(|worker| {
-                    worker.revoked.cancel();
-                    worker.finished.clone()
-                })
+                .filter_map(|worker| worker.revoke_for(provider))
                 .collect::<Vec<_>>()
         };
         for worker in pending {
@@ -1285,16 +1283,30 @@ impl VoiceQueue {
 }
 
 impl Worker {
+    fn revoke_for(&self, provider: SpeechProvider) -> Option<CancellationToken> {
+        (self.provider == provider).then(|| {
+            self.revoked.cancel();
+            self.finished.clone()
+        })
+    }
+
     fn active_voice<T>(&self, selected: Option<T>) -> Option<T> {
         selected.filter(|_| !self.tts_unavailable.load(Relaxed))
     }
 
     fn disable_voice(&self, app: &AppHandle, error: &anyhow::Error) {
         self.tts_unavailable.store(true, Relaxed);
-        let detail = match self.provider {
-            SpeechProvider::Gemini => "Voxa sẽ dùng giọng Gemini Trực tiếp cho phần tiếp theo.",
-            SpeechProvider::Soniox => "Phiên này tiếp tục ở chế độ chỉ phụ đề.",
+        let (mode, detail) = match self.provider {
+            SpeechProvider::Gemini => (
+                "native",
+                "Voxa sẽ dùng giọng Gemini Trực tiếp cho phần tiếp theo.",
+            ),
+            SpeechProvider::Soniox => ("captions", "Phiên này tiếp tục ở chế độ chỉ phụ đề."),
         };
+        let _ = app.emit(
+            "voxa:voice-mode",
+            serde_json::json!({ "lane": self.lane.label(), "mode": mode }),
+        );
         let _ = app.emit(
             "voxa:notice",
             format!(
@@ -1420,7 +1432,11 @@ async fn play_voice(
         Voice::Local(engine, name) => {
             let first = await_first_voice(job, worker.lane, async {
                 voice_gap(worker.lane, engine.request(text, name)).await?;
-                voice_gap(worker.lane, engine.read()).await
+                if worker.lane == Lane::Listen {
+                    engine.read().await
+                } else {
+                    voice_gap(worker.lane, engine.read()).await
+                }
             })
             .await?
             .ok_or_else(|| anyhow!("VieNeu-TTS không kịp đọc đoạn hiện tại."))?;
@@ -1438,7 +1454,11 @@ async fn play_voice(
         Voice::Soniox(engine) => {
             let first = await_first_voice(job, worker.lane, async {
                 let mut socket = engine.start(text).await?;
-                let pcm = voice_gap(worker.lane, soniox::read_voice(&mut socket)).await?;
+                let pcm = if worker.lane == Lane::Listen {
+                    soniox::read_voice(&mut socket).await?
+                } else {
+                    voice_gap(worker.lane, soniox::read_voice(&mut socket)).await?
+                };
                 Ok((socket, pcm))
             })
             .await?;
@@ -1874,6 +1894,34 @@ mod listen_latency_tests {
 #[cfg(test)]
 mod voice_fallback_tests {
     use super::*;
+
+    #[test]
+    fn revocation_targets_only_the_selected_provider() {
+        let worker = Worker {
+            lane: Lane::Listen,
+            provider: SpeechProvider::Soniox,
+            cancelled: CancellationToken::new(),
+            revoked: CancellationToken::new(),
+            finished: CancellationToken::new(),
+            capture: Arc::new(Capture::new(false)),
+            sound: Arc::new(AtomicBool::new(true)),
+            tts_unavailable: AtomicBool::new(false),
+            health: ListenHealth::default(),
+            meeting_turn: Arc::new(PushToTalk::default()),
+            quiet_listen_during_talk: Arc::new(AtomicBool::new(false)),
+            mic_sensitivity: MicSensitivity::default(),
+            session: None,
+            started_at: 0,
+        };
+        assert!(worker.revoke_for(SpeechProvider::Gemini).is_none());
+        assert!(!worker.revoked.is_cancelled());
+        let finished = worker.revoke_for(SpeechProvider::Soniox).unwrap();
+        assert!(worker.revoked.is_cancelled());
+        assert!(!worker.cancelled.is_cancelled());
+        assert!(!finished.is_cancelled());
+        worker.finished.cancel();
+        assert!(finished.is_cancelled());
+    }
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_voice_yields_to_the_next_phrase() {
