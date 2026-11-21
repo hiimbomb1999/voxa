@@ -111,14 +111,48 @@
               <p id="talk-device-summary" class="device-summary"></p>
               <p class="hint route-warning" id="route-warning" role="status" hidden></p>
               <button id="talk-toggle" class="primary full" type="button">Bật dịch micro</button>
-              <details class="meeting-options meeting-diagnostics" id="meeting-diagnostics">
-                <summary>Kiểm tra âm thanh và độ trễ</summary>
-                <div class="meeting-tests">
-                  <button class="secondary" id="test-microphone" type="button">Thử micro</button>
-                  <button class="secondary" id="test-loopback" type="button">Nghe lại BlackHole</button>
-                  <button class="plain" id="test-blackhole" type="button">Gửi âm thử</button>
+              <details class="meeting-options" id="meeting-setup">
+                <summary>Thiết lập micro cho Meet / Zoom</summary>
+                <ol class="meeting-setup-steps">
+                  <li>
+                    <strong>Chọn micro và cáp</strong>
+                    <div class="field-row">
+                      <label>Micro của bạn<select id="microphone"><option value="">Mặc định hệ thống</option></select></label>
+                      <label>Gửi qua<select id="blackhole"></select></label>
+                    </div>
+                    <label class="meeting-setting">Độ nhạy micro
+                      <select id="mic-sensitivity">
+                        <option value="sensitive">Nhạy · nói nhỏ</option>
+                        <option value="balanced" selected>Cân bằng</option>
+                        <option value="noisy">Lọc nền mạnh hơn</option>
+                      </select>
+                    </label>
+                    <button class="secondary" id="test-microphone" type="button">Thử nhận giọng</button>
+                    <p id="microphone-test-result" class="hint" role="status" hidden></p>
+                  </li>
+                  <li>
+                    <strong>Nghe lại qua cáp</strong>
+                    <p class="hint" id="loopback-help"></p>
+                    <div class="meeting-tests">
+                      <button class="secondary" id="test-loopback" type="button">Nghe lại BlackHole</button>
+                      <button class="plain" id="test-blackhole" type="button">Gửi âm thử</button>
+                    </div>
+                    <p class="hint">Chọn loa nghe lại ở <button type="button" class="plain inline-action" id="choose-monitor">Tùy chọn phát</button>.</p>
+                    <p id="meeting-test-result" class="hint" role="status" hidden></p>
+                  </li>
+                  <li>
+                    <strong>Chọn micro trong Meet hoặc Zoom</strong>
+                    <p class="hint" id="meeting-microphone-help"></p>
+                  </li>
+                </ol>
+                <div id="talk-voices" class="field-row" hidden>
+                  <label>Giọng tiếng Anh<select id="talk-voice"><option value="">Trực tiếp · Gemini</option><optgroup label="VieNeu-TTS · Trên Mac" id="talk-local"></optgroup></select></label>
+                  <button class="plain" id="talk-preview" type="button" hidden>Nghe thử giọng</button>
                 </div>
-                <p id="meeting-test-result" class="hint" role="status" hidden></p>
+                <label class="switch"><input id="quiet-listen" type="checkbox" checked> Tạm tắt tiếng chiều nghe trong lượt nói</label>
+              </details>
+              <details class="meeting-options meeting-diagnostics" id="meeting-diagnostics">
+                <summary>Độ trễ lượt nói</summary>
                 <div class="latency" aria-labelledby="latency-title">
                   <h3 id="latency-title">Thả phím đến lúc phát</h3>
                   <dl>
@@ -130,28 +164,6 @@
                   <p class="hint" id="latency-location"></p>
                   <span id="latency-announcement" class="sr-only" role="status"></span>
                 </div>
-                <p class="hint" id="loopback-help"></p>
-              </details>
-              <details class="meeting-options" id="meeting-setup">
-                <summary>Thiết bị, giọng và chống vọng</summary>
-                <div class="field-row">
-                  <label>Micro của bạn<select id="microphone"><option value="">Mặc định hệ thống</option></select></label>
-                  <label>Gửi qua<select id="blackhole"></select></label>
-                </div>
-                <div id="talk-voices" class="field-row" hidden>
-                  <label>Giọng tiếng Anh<select id="talk-voice"><option value="">Trực tiếp · Gemini</option><optgroup label="VieNeu-TTS · Trên Mac" id="talk-local"></optgroup></select></label>
-                  <button class="plain" id="talk-preview" type="button" hidden>Nghe thử giọng</button>
-                </div>
-                <label class="meeting-setting">Độ nhạy micro
-                  <select id="mic-sensitivity">
-                    <option value="sensitive">Nhạy · nói nhỏ</option>
-                    <option value="balanced" selected>Cân bằng</option>
-                    <option value="noisy">Lọc nền mạnh hơn</option>
-                  </select>
-                </label>
-                <label class="switch"><input id="quiet-listen" type="checkbox" checked> Tạm tắt tiếng chiều nghe trong lượt nói</label>
-                <p class="hint" id="meeting-microphone-help"></p>
-                <p class="hint">Chọn loa nghe lại ở <button type="button" class="plain inline-action" id="choose-monitor">Tùy chọn phát</button>.</p>
               </details>
             </div>
           </section>

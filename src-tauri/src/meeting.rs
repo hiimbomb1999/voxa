@@ -8,6 +8,8 @@ use std::{
     time::Instant,
 };
 
+pub const MIC_CHUNK_SAMPLES: usize = 320;
+
 const IDLE: u8 = 0;
 const HOLDING: u8 = 1;
 const REPLYING: u8 = 2;

@@ -1,7 +1,7 @@
 use crate::{
     audio::{self, AudioIo, Capture, Input, Setup},
     history::{self, Caption, History, Session},
-    meeting::{MicSensitivity, PushToTalk, SpeechGate},
+    meeting::{MicSensitivity, PushToTalk, SpeechGate, MIC_CHUNK_SAMPLES},
     provider, soniox, vieneu,
 };
 use anyhow::{anyhow, bail, Result};
@@ -902,7 +902,7 @@ async fn stream(
         io.playback.track_onset();
         captions.first_voice_text = None;
     }
-    let mut encoder = Encoder::new(io.rate, if talk { 320 } else { 1_600 });
+    let mut encoder = Encoder::new(io.rate, if talk { MIC_CHUNK_SAMPLES } else { 1_600 });
     let mut speech = SpeechGate::new(worker.mic_sensitivity);
     let mut released = None;
     let mut completed = None;
@@ -1070,8 +1070,12 @@ async fn stream(
                     }
                     let active = last_active.is_some_and(|when| now.duration_since(when) < Duration::from_secs(2));
                     let (next, detail) = if worker.lane != Lane::Listen {
-                        if pressed && talk && !turn_sent { ("waiting_speech", "Đang chờ bạn nói…") }
+                        if pressed && talk && !turn_sent { ("waiting_speech", "Đang chờ nhận giọng…") }
+                        else if pressed && talk { ("speaking", "Đã nhận giọng · Đang thu micro") }
                         else if pressed { ("speaking", "Đang thu micro…") }
+                        else if talk && worker.meeting_turn.replying() && latency_reported {
+                            ("playing_reply", "Đã phát bản dịch ra cáp cuộc họp")
+                        }
                         else if talk && worker.meeting_turn.replying() { ("replying", "Đang hoàn tất bản dịch…") }
                         else { ("ready", "Giữ phím để nói") }
                     } else if !worker.can_play() && worker.sound.load(Relaxed) {

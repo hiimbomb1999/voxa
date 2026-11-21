@@ -1,3 +1,4 @@
+use crate::meeting::{MicSensitivity, SpeechGate, MIC_CHUNK_SAMPLES};
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -760,13 +761,22 @@ fn open_input(
 pub struct MicTest {
     name: String,
     peak: f32,
+    voice_detected: bool,
 }
 
-pub fn test_microphone(name: Option<&str>, on_level: impl Fn(f32)) -> Result<MicTest> {
-    let capture = Arc::new(Capture::new(false));
+pub fn test_microphone(
+    name: Option<&str>,
+    sensitivity: MicSensitivity,
+    on_level: impl Fn(f32),
+) -> Result<MicTest> {
+    let capture = Arc::new(Capture::with_capacity(false, 48_000));
     let failed = Arc::new(AtomicBool::new(false));
-    let (_stream, _, name) = open_microphone(name, capture.clone(), failed.clone())?;
+    let (_stream, rate, name) = open_microphone(name, capture.clone(), failed.clone())?;
+    capture.ready.store(true, Relaxed);
+    let mut encoder = Encoder::new(rate, MIC_CHUNK_SAMPLES);
+    let mut speech = SpeechGate::new(sensitivity);
     let mut peak = 0.0_f32;
+    let mut voice_detected = false;
     for _ in 0..24 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if failed.load(Relaxed) {
@@ -775,8 +785,20 @@ pub fn test_microphone(name: Option<&str>, on_level: impl Fn(f32)) -> Result<Mic
         let level = capture.take_peak();
         peak = peak.max(level);
         on_level(level);
+        while let Some(sample) = capture.samples.pop() {
+            if !voice_detected {
+                encoder.push(sample);
+            }
+        }
+        while let Some(chunk) = encoder.take_chunk() {
+            voice_detected |= !speech.push(chunk).is_empty();
+        }
     }
-    Ok(MicTest { name, peak })
+    Ok(MicTest {
+        name,
+        peak,
+        voice_detected,
+    })
 }
 
 fn input_stream<T>(

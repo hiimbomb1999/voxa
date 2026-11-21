@@ -83,14 +83,19 @@ async fn test_microphone(
     app: AppHandle,
     state: tauri::State<'_, State>,
     microphone: Option<String>,
+    sensitivity: meeting::MicSensitivity,
 ) -> Result<audio::MicTest, String> {
     let test = visible_error(state.begin_audio_test())?;
     visible_error(audio::microphone_permission().await)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _test = test;
-        visible_error(audio::test_microphone(microphone.as_deref(), |level| {
-            let _ = app.emit("voxa:microphone-test", level);
-        }))
+        visible_error(audio::test_microphone(
+            microphone.as_deref(),
+            sensitivity,
+            |level| {
+                let _ = app.emit("voxa:microphone-test", level);
+            },
+        ))
     })
     .await
     .map_err(|_| "Không thể kiểm tra micro.".to_owned())?

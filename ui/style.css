@@ -272,7 +272,8 @@ select option { background: var(--field-solid); color: var(--ink); }
 .lane-status::before { content: ""; display: inline-block; width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--quiet); }
 .lane[data-state="translating"] .lane-status::before, .lane[data-state="listening"] .lane-status::before,
 .lane[data-state="ready"] .lane-status::before, .lane[data-state="speaking"] .lane-status::before,
-.lane[data-state="waiting_speech"] .lane-status::before, .lane[data-state="replying"] .lane-status::before { background: var(--green); }
+.lane[data-state="waiting_speech"] .lane-status::before, .lane[data-state="replying"] .lane-status::before,
+.lane[data-state="playing_reply"] .lane-status::before { background: var(--green); }
 .lane[data-state="error"] .lane-status::before, .lane[data-state="no_signal"] .lane-status::before { background: var(--amber); }
 .direction { padding: 4px 8px; border-radius: 100px; background: var(--violet-tint); color: var(--violet); font-size: 10px; line-height: 1.3; font-weight: 730; white-space: nowrap; letter-spacing: .035em; }
 .direction span { margin-inline: 2px; }
@@ -407,3 +408,9 @@ kbd { font-size: 11px; font-family: inherit; margin-left: 5px; font-weight: 560;
   .voice-stage, .overlay { background: #33242f; }
   .top, .control-card, .history-list { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
 }
+
+.meeting-setup-steps { display: grid; gap: 10px; margin: 10px 0; padding-inline-start: 20px; }
+.meeting-setup-steps > li::marker { color: var(--accent); font-weight: 650; }
+.meeting-setup-steps > li { padding-inline-start: 3px; }
+.meeting-setup-steps .field-row { margin-top: 6px; }
+.meeting-setup-steps .hint { margin-top: 5px; }

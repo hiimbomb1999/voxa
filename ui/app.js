@@ -7,8 +7,9 @@ const credentialStore = () => isWindows ? "Windows Credential Manager" : "macOS 
 
 const get = (id) => document.getElementById(id);
 const invoke = (command, args) => api.core.invoke(command, args);
-const activeStates = new Set(["opening", "connecting", "reconnecting", "ready", "speaking", "listening", "translating", "silent", "no_signal", "waiting_speech", "replying", "listen_quiet", "stopping"]);
+const activeStates = new Set(["opening", "connecting", "reconnecting", "ready", "speaking", "listening", "translating", "silent", "no_signal", "waiting_speech", "replying", "playing_reply", "listen_quiet", "stopping"]);
 const holdingStates = new Set(["ready", "speaking", "waiting_speech"]);
+const replyStates = new Set(["replying", "playing_reply"]);
 const laneLabels = { listen: "Chiều nghe", talk: "Chiều nói", assistant: "Trợ lý" };
 const statuses = { listen: "stopped", talk: "stopped", assistant: "stopped" };
 const latest = { original: "", translation: "" };
@@ -26,6 +27,7 @@ const voiceLabels = {
   waiting_speech: "Chờ bạn nói",
   speaking: "Đang thu micro",
   replying: "Đang xử lý lượt nói",
+  playing_reply: "Đã phát ra cáp cuộc họp",
   ready: "Giữ phím để nói",
   listening: "Đang nhận âm thanh",
   translating: "Đang dịch",
@@ -398,12 +400,12 @@ function renderVoiceStage() {
   const state = statuses[lane];
   const { peak, outputPeak } = levels[lane];
   const active = showTalk ? talkActive : listenActive;
-  const output = active && outputPeak > 0.003 && (lane === "listen" || state === "replying");
+  const output = active && outputPeak > 0.003 && (lane === "listen" || replyStates.has(state));
   const input = micTesting || active && (lane === "talk" ? holdingStates.has(state) && state !== "ready" : peak > 0.002);
   let mode = "idle";
   if (output) mode = "output";
   else if (input) mode = "input";
-  else if (["opening", "connecting", "reconnecting", "replying", "translating"].includes(state)) mode = "work";
+  else if (["opening", "connecting", "reconnecting", "replying", "playing_reply", "translating"].includes(state)) mode = "work";
 
   const label = micTesting ? "Kiểm tra micro"
     : output ? (showTalk ? `Đang phát qua ${meetingCable()}` : "Đang phát bản dịch")
@@ -415,7 +417,7 @@ function renderVoiceStage() {
   get("voice-channel").hidden = !channel;
   if (get("voice-channel").textContent !== channel) get("voice-channel").textContent = channel;
   get("voice-stage").dataset.mode = mode;
-  const holdLabel = talkState !== "replying" ? "Giữ để nói" : output ? "Đợi phát xong" : "Đang xử lý lượt nói";
+  const holdLabel = talkState === "playing_reply" ? "Đợi phát xong" : talkState === "replying" ? "Đang xử lý lượt nói" : "Giữ để nói";
   if (get("talk-hold-label").textContent !== holdLabel) get("talk-hold-label").textContent = holdLabel;
   voiceMotion(mode, output ? outputPeak : input ? peak : 0);
 }
@@ -432,17 +434,22 @@ async function testMicrophone() {
   soundTest = true;
   micTesting = true;
   updateControls();
-  message("meeting-test-result", "Hãy nói một câu để xem mức micro.");
+  message("microphone-test-result", "Nói một câu để kiểm tra độ nhạy đang chọn.");
   try {
-    const { name, peak } = await invoke("test_microphone", { microphone: get("microphone").value || null });
-    if (peak >= 0.01) {
+    const { name, peak, voice_detected: detected } = await invoke("test_microphone", {
+      microphone: get("microphone").value || null,
+      sensitivity: get("mic-sensitivity").value,
+    });
+    if (detected) {
       const db = Math.round(20 * Math.log10(peak));
-      message("meeting-test-result", `${name} · mức đỉnh ${db} dBFS`);
+      message("microphone-test-result", `Đã nhận giọng qua ${name} · đỉnh ${db} dBFS.`);
+    } else if (peak > 0.002) {
+      message("microphone-test-result", "Có tín hiệu nhưng chưa nhận ra giọng. Thử nói gần micro hơn hoặc chọn độ nhạy cao hơn.");
     } else {
-      message("meeting-test-result", `Tín hiệu từ ${name} rất thấp. Chọn micro khác hoặc tăng mức đầu vào trong cài đặt âm thanh của hệ thống.`);
+      message("microphone-test-result", `Tín hiệu từ ${name} rất thấp. Kiểm tra quyền micro hoặc chọn đầu vào khác.`);
     }
   } catch (error) {
-    message("meeting-test-result", errorText(error));
+    message("microphone-test-result", errorText(error));
   } finally {
     micTesting = false;
     updateLevel("talk", 0);
@@ -468,7 +475,7 @@ function updateControls() {
     if (mic) {
       mic.disabled = !holdingStates.has(state);
       if (lane === "talk") {
-        mic.hidden = mic.disabled && state !== "replying";
+        mic.hidden = mic.disabled && !replyStates.has(state);
         get("voice-actions").hidden = mic.hidden;
       }
     }
@@ -842,7 +849,16 @@ async function initialize() {
   bindHistory();
   get("refresh").addEventListener("click", refreshDevices);
   get("routing-refresh").addEventListener("click", refreshDevices);
-  for (const id of ["microphone", "blackhole"]) get(id).addEventListener("change", updateMeetingRoute);
+  for (const id of ["microphone", "mic-sensitivity"]) {
+    get(id).addEventListener("change", () => {
+      message("microphone-test-result", "");
+      updateMeetingRoute();
+    });
+  }
+  get("blackhole").addEventListener("change", () => {
+    message("meeting-test-result", "");
+    updateMeetingRoute();
+  });
   get("test-microphone").addEventListener("click", () => void testMicrophone());
   get("quiet-listen").addEventListener("change", (event) => {
     void invoke("set_quiet_listen", { enabled: event.target.checked }).catch((error) => message("message", errorText(error)));
@@ -918,7 +934,7 @@ async function initialize() {
       get("key").value = "";
       hasKey = true;
       paintKey();
-      message("settings-message", "Đã lưu key vào macOS Keychain.");
+      message("settings-message", `Đã lưu key trong ${credentialStore()}.`);
       if (returnToListen) {
         returnToListen = false;
         showView("live", false);
@@ -928,7 +944,7 @@ async function initialize() {
     } catch (error) { message("settings-message", errorText(error)); }
   });
   get("forget-key").addEventListener("click", async () => {
-    if (!window.confirm("Xóa Gemini API key khỏi máy này?")) return;
+    if (!window.confirm("Dừng các luồng Gemini và xóa API key đã lưu?")) return;
     try {
       await invoke("forget_key");
       hasKey = false;
@@ -954,6 +970,7 @@ async function initialize() {
     } catch (error) { message("settings-message", errorText(error)); }
   });
   get("forget-soniox").addEventListener("click", async () => {
+    if (!window.confirm("Dừng các luồng Soniox và xóa API key đã lưu?")) return;
     try {
       await invoke("forget_soniox_key");
       hasSonioxKey = false;
