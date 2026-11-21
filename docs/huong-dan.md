@@ -1,6 +1,6 @@
 # Hướng dẫn sử dụng Voxa
 
-[← Về giới thiệu dự án](../README.md)
+[← Về giới thiệu dự án](../README.md) · [Xem video demo ở đầu README](../README.md#see-voxa-in-action)
 
 Phiên dịch âm thanh trực tiếp trên macOS bằng Rust và Tauri, với Gemini Live hoặc Soniox. Cần macOS 14.2 trở lên. Bản thử hiện được đóng gói cho Apple Silicon.
 

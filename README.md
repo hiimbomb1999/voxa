@@ -2,11 +2,15 @@
 
 **An open-source, real-time interpreter for macOS.** Follow videos and meetings with bilingual captions and spoken translation, or speak Vietnamese and route the English translation into a call.
 
-[Tiếng Việt](docs/huong-dan.md) · [Watch the demo](docs/media/voxa-demo.mp4) · [Contributing](CONTRIBUTING.md)
+[Tiếng Việt](docs/huong-dan.md) · [Contributing](CONTRIBUTING.md)
 
-[![Voxa showing bilingual captions, audio controls, and a virtual microphone route](docs/media/live-captions.png)](docs/media/voxa-demo.mp4)
+## See Voxa in action
 
-*The screenshots and demo use synthetic captions and device labels.*
+![15-second Voxa demo showing live captions, microphone translation, and transcript history](docs/media/voxa-demo.gif)
+
+[Watch the full-size MP4](https://raw.githubusercontent.com/hiimbomb1999/voxa/main/docs/media/voxa-demo.mp4) · [View the live captions screenshot](docs/media/live-captions.png)
+
+*The demo and screenshots use synthetic captions and device labels.*
 
 ## What you can do
 
