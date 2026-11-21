@@ -70,14 +70,14 @@ cargo build --locked --release --features custom-protocol --manifest-path src-ta
 ```
 
 - **Listen:** in Voxa, choose **Toàn hệ thống**, select your target language, and start video playback. WASAPI captures system audio while excluding Voxa's process tree.
-- **Talk:** install [VB-CABLE](https://vb-audio.com/Cable/). In Voxa, choose your physical microphone and **CABLE Input** as the meeting output. In Meet or Zoom, choose **CABLE Output** as its microphone and headphones or speakers as its output. Use Voxa's test tone to confirm the route, then hold **Control + Shift + Space** to speak.
+- **Talk:** install [VB-CABLE](https://vb-audio.com/Cable/). In Voxa, choose your physical microphone and **CABLE Input** as the meeting output. In Meet or Zoom, choose **CABLE Output** as its microphone and headphones or speakers as its output. Open the meeting microphone setup in Voxa to test speech detection and hear the cable loopback. Then hold **Control + Shift + Space** to speak.
 - The Windows preview supports system-wide capture. Per-app capture, automatic ducking, and the VieNeu installer are currently macOS features.
 
 ## Data and current limits
 
 - API keys are stored in macOS Keychain or Windows Credential Manager. Cloud translation sends captured audio to the selected provider. Cloud TTS receives the translated text, and requesting a Gemini summary sends the selected transcript to Gemini. Provider quotas, pricing, and data policies apply.
 - Transcript saving is optional. Voxa stores saved text and time markers locally. VieNeu runs speech synthesis locally while speech recognition and translation still use a cloud provider.
-- Voxa processes the audio stream while the source app controls video playback. Translation adds latency, and Voxa can omit overdue audio to catch up while keeping the translated text in captions.
+- Voxa processes the audio stream while the source app controls video playback. Translation adds latency, and Voxa can omit overdue audio to catch up while keeping the translated text in captions. Playback options show queue peaks and skipped audio as the session runs. SRT exports use Voxa session time.
 - The macOS bundle script ad hoc signs builds for local development. End-to-end quality depends on the provider, language, and hardware routing.
 
 ## Development

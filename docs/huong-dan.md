@@ -10,7 +10,7 @@ Chọn phiên bản ở [GitHub Releases](https://github.com/hiimbomb1999/voxa/r
 
 ## Windows 11 x64 bản thử
 
-Xem cách tải hoặc tự build ở [mục Windows trong README](../README.md#windows-11-x64-preview). Bản thử dùng WASAPI để thu toàn hệ thống và hỗ trợ Gemini, Soniox. Để gửi tiếng Anh vào cuộc họp, chọn **CABLE Input** ở Voxa và **CABLE Output** làm micro trong Meet/Zoom. Kiểm thử âm thanh trên thiết bị Windows thực tế vẫn đang chờ.
+Xem cách tải hoặc tự build ở [mục Windows trong README](../README.md#windows-11-x64-preview). Bản thử dùng WASAPI để thu toàn hệ thống và hỗ trợ Gemini, Soniox. Để gửi tiếng Anh vào cuộc họp, chọn **CABLE Input** ở Voxa và **CABLE Output** làm micro trong Meet/Zoom. Mở **Nói trong cuộc họp → Thiết lập micro cho Meet / Zoom** để thử nhận giọng và nghe lại qua cáp. Kiểm thử âm thanh trên thiết bị Windows thực tế vẫn đang chờ.
 
 ## Mở và dịch video trên macOS
 
@@ -19,7 +19,7 @@ Xem cách tải hoặc tự build ở [mục Windows trong README](../README.md#
 3. Bấm **Bắt đầu dịch** và cấp quyền **System Audio Recording** cho Voxa khi macOS hỏi. Phụ đề có thể hiển thị nổi, song ngữ hoặc chỉ bản dịch.
 4. **Trực tiếp** dùng âm thanh do Gemini Live Translate trả về. Các giọng có tên dùng TTS từ phụ đề đã nhận nên có thể xuất hiện muộn hơn. Khi dùng chế độ chỉ phụ đề, bỏ chọn **Phát giọng dịch**.
 
-Chiều nghe ưu tiên bám sát nguồn. Nếu nhiều đoạn đến dồn, Voxa có thể bỏ tiếng của đoạn đã quá trễ và giữ bản dịch trong phụ đề. Voxa xử lý âm thanh hệ thống nên hình ảnh vẫn do ứng dụng phát video điều khiển.
+Mở **Tùy chọn phát** để xem độ trễ lần đầu, thời gian chờ trong hàng đợi và tổng lượng âm bị bỏ qua. Các số liệu hàng đợi cập nhật trong suốt phiên. Chiều nghe ưu tiên bám sát nguồn. Nếu nhiều đoạn đến dồn, Voxa có thể bỏ tiếng của đoạn đã quá trễ và giữ bản dịch trong phụ đề. Voxa xử lý âm thanh hệ thống nên hình ảnh vẫn do ứng dụng phát video điều khiển.
 
 **Giảm tiếng gốc khi phát bản dịch** hạ tiếng nguồn còn khoảng 8% khi Voxa phát giọng dịch và tự tăng lại khi bản dịch ngừng. Chọn một ứng dụng làm nguồn nếu muốn hạ tiếng riêng ứng dụng đó. Chế độ này phát cả tiếng gốc và bản dịch qua thiết bị bạn chọn ở **Tùy chọn phát**. Dừng lượt nghe để bật hoặc tắt tùy chọn.
 
@@ -46,17 +46,17 @@ Cài một lần bằng `./scripts/install-vieneu.sh` (cần [uv](https://docs.a
 6. Bấm **Bật dịch micro**, cấp quyền micro và chờ **Giữ phím để nói**. Giữ **Control + Shift + Space** khi nói tiếng Việt, rồi thả phím. Bạn cũng có thể giữ nút ở vùng trạng thái bên trên phụ đề. Dải sáng phản ứng theo tín hiệu micro và đổi sang màu lam khi Voxa đang phát bản dịch. Đầu ra tiếng Anh đi vào BlackHole, chiều nghe đi vào loa hoặc tai nghe.
 7. Để dùng lại micro thật với cuộc gọi, đổi thiết bị đầu vào ngay trong Meet/Zoom.
 
-Trong **Thiết bị, giọng và chống vọng**, chọn **Nhạy** nếu nói nhỏ hoặc mất đầu câu, và **Lọc nền mạnh hơn** khi micro dễ nhận tiếng quạt. Voxa đợi bạn thả phím mới phát tiếng Anh vào BlackHole, rồi mở lượt nói mới sau khi âm thanh đã phát xong. Bạn có thể tạm tắt tiếng chiều nghe trong lượt nói và vẫn theo dõi phụ đề.
+Trong **Thiết lập micro cho Meet / Zoom**, chọn **Nhạy** nếu nói nhỏ hoặc mất đầu câu, và **Lọc nền mạnh hơn** khi micro dễ nhận tiếng quạt. Voxa đợi bạn thả phím mới phát tiếng Anh vào BlackHole, rồi mở lượt nói mới sau khi âm thanh đã phát xong. Bạn có thể tạm tắt tiếng chiều nghe trong lượt nói và vẫn theo dõi phụ đề.
 
-Trong **Kiểm tra âm thanh và độ trễ**, bấm **Thử micro** để đo mức tín hiệu hoặc **Nghe lại BlackHole** để gửi hai tiếng bíp, thu lại từ BlackHole và phát qua loa hoặc tai nghe đã chọn. Thử trước khi vào họp. Voxa giữ mẫu thử trong bộ nhớ trong lúc kiểm tra.
+Bấm **Thử nhận giọng** để kiểm tra độ nhạy theo cùng bộ phát hiện của phiên thật. Bấm **Nghe lại BlackHole** hoặc **Nghe lại VB-CABLE** để gửi hai tiếng bíp qua cáp rồi phát lại trên tai nghe đã chọn. Thử trước khi vào họp. Voxa giữ mẫu thử trong bộ nhớ trong lúc kiểm tra.
 
-**Thả phím đến lúc phát** hiển thị số đo gần nhất của Gemini Trực tiếp, Soniox và VieNeu trong lần mở ứng dụng hiện tại. Để so sánh, thử cùng một câu với từng giọng. Với Soniox và VieNeu, app còn tách thời gian chờ bản dịch và thời gian tạo giọng đến lúc phát. Số đo kết thúc ở ngõ ra BlackHole trên Mac.
+**Độ trễ lượt nói** hiển thị số đo gần nhất của Gemini Trực tiếp, Soniox và VieNeu trong lần mở ứng dụng hiện tại. Để so sánh, thử cùng một câu với từng giọng. Với Soniox và VieNeu, app còn tách thời gian chờ bản dịch và thời gian tạo giọng đến lúc phát. Số đo kết thúc ở ngõ ra BlackHole trên Mac hoặc VB-CABLE trên Windows.
 
 Nếu thấy mã **1008**, mở **Cài đặt → Kiểm tra kết nối Live** để xác minh Gemini chấp nhận cấu hình bằng key đang lưu. Phép thử chỉ mở kết nối và không gửi âm thanh. Nếu lỗi xuất hiện sau khi phiên đã chạy, Voxa thử kết nối lại một lần.
 
 ## Lịch sử và trợ lý
 
-**Lưu transcript** lưu văn bản và mốc thời gian trên Mac, không lưu bản ghi âm. Có thể xuất TXT, Markdown hoặc SRT. Bấm **Xóa** trên một dòng trong Lịch sử và xác nhận để xóa phiên đã lưu. SRT xuất các đoạn bản dịch hoặc phản hồi. **Tóm tắt cuộc họp** gửi transcript đã chọn tới Gemini. Trợ lý giọng nói nằm trong **Cài đặt** và dùng micro riêng theo thao tác giữ-nói. Dừng dịch micro của cuộc họp trước khi bật trợ lý.
+**Lưu transcript** ghi văn bản và mốc thời gian trên thiết bị. Voxa ghi nhớ lựa chọn này giữa các lần mở app. Trong Lịch sử, bấm **Xem phiên cũ hơn** để duyệt các phiên trước hoặc **Xóa** để xóa từng phiên. Có thể xuất TXT, Markdown hoặc SRT. Mốc SRT tính từ lúc phiên Voxa bắt đầu và dựa trên thời điểm nhận bản dịch. Khi ghép vào video nguồn, mốc có thể cần căn lại. **Tóm tắt cuộc họp** gửi transcript đã chọn tới Gemini. Trợ lý giọng nói nằm trong **Cài đặt** và dùng micro riêng theo thao tác giữ-nói. Dừng dịch micro của cuộc họp trước khi bật trợ lý.
 
 ## Build và kiểm thử
 
@@ -69,3 +69,10 @@ cargo clippy --locked --all-targets --features custom-protocol --manifest-path s
 ```
 
 Gói `.app` được ký ad hoc để thử cục bộ. Kiểm thử tự động dùng dữ liệu tổng hợp. Để xác minh độ trễ và chiều nói thực tế, dùng key của bạn, BlackHole và một cuộc gọi thử có người nghe ở đầu kia. Đo riêng thời gian đến phụ đề, thời gian đến âm thanh và khả năng phục hồi sau khi mất mạng.
+
+### Thử phiên 15 phút và âm thanh trong cuộc gọi
+
+- Phát cùng một video 15 phút có lời nói và vài khoảng nghỉ rõ. Ghi độ lệch giữa một câu gốc và tiếng dịch ở đầu, giữa và cuối video. So sánh từng giọng với cùng đoạn video, ngôn ngữ và thiết bị phát.
+- Trong **Tùy chọn phát**, ghi số đo lần đầu, đỉnh hàng đợi và tổng lượng âm gốc hoặc âm dịch bị bỏ qua. Khi thử mất mạng ngắn, kiểm tra app có quay lại phần đang phát hay còn đọc bản dịch của đoạn cũ.
+- Trong một cuộc gọi thử Meet hoặc Zoom, bật cả hai chiều. Thử nói nhỏ và nói bình thường, kiểm tra **Đã nhận giọng** rồi **Đã phát bản dịch ra cáp cuộc họp**. Xác nhận âm ở thiết bị của người nghe, vì chỉ báo trong Voxa đo tại ngõ ra cáp.
+- Đổi tai nghe và thử mất mạng giữa cuộc gọi. Ghi hệ điều hành, nhà cung cấp, thiết bị trước và sau khi đổi cùng thông báo của Voxa. Dùng nội dung thử có thể chia sẻ khi đính kèm báo lỗi.
