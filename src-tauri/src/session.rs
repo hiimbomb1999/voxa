@@ -105,7 +105,10 @@ fn default_true() -> bool {
 
 struct Worker {
     lane: Lane,
+    provider: SpeechProvider,
     cancelled: CancellationToken,
+    revoked: CancellationToken,
+    finished: CancellationToken,
     capture: Arc<Capture>,
     sound: Arc<AtomicBool>,
     tts_unavailable: AtomicBool,
@@ -273,6 +276,7 @@ impl State {
                 audio::MEETING_DEVICE
             );
         }
+        let mut slots = self.active.lock().unwrap();
         let key = match options.provider {
             SpeechProvider::Gemini => provider::load_key()?,
             SpeechProvider::Soniox => soniox::load_key()?,
@@ -283,7 +287,6 @@ impl State {
                 options.provider.label()
             )
         })?;
-        let mut slots = self.active.lock().unwrap();
         if self.audio_test.load(Relaxed) {
             bail!("Chờ phép thử âm thanh hoàn tất trước khi bắt đầu dịch.");
         }
@@ -317,7 +320,10 @@ impl State {
         }
         let worker = Arc::new(Worker {
             lane,
+            provider: options.provider,
             cancelled: CancellationToken::new(),
+            revoked: CancellationToken::new(),
+            finished: CancellationToken::new(),
             capture: Arc::new(Capture::new(lane != Lane::Listen)),
             sound: Arc::new(AtomicBool::new(options.sound || lane != Lane::Listen)),
             tts_unavailable: AtomicBool::new(false),
@@ -332,7 +338,11 @@ impl State {
         let history = self.history.clone();
 
         tauri::async_runtime::spawn(async move {
-            let result = run(&app, &worker, &history, options, &key).await;
+            let result = tokio::select! {
+                biased;
+                _ = worker.revoked.cancelled() => Ok(()),
+                result = run(&app, &worker, &history, options, &key) => result,
+            };
             worker.capture.ready.store(false, Relaxed);
             worker.capture.pressed.store(false, Relaxed);
             worker.capture.clear();
@@ -345,7 +355,32 @@ impl State {
             } else {
                 status(&app, lane, "stopped", "");
             }
+            worker.finished.cancel();
         });
+        Ok(())
+    }
+
+    pub async fn forget_key(&self, provider: SpeechProvider) -> Result<()> {
+        let pending = {
+            // Starting a worker and revoking credentials share the same lock.
+            let slots = self.active.lock().unwrap();
+            match provider {
+                SpeechProvider::Gemini => provider::forget_key()?,
+                SpeechProvider::Soniox => soniox::forget_key()?,
+            }
+            slots
+                .iter()
+                .flatten()
+                .filter(|worker| worker.provider == provider)
+                .map(|worker| {
+                    worker.revoked.cancel();
+                    worker.finished.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        for worker in pending {
+            worker.cancelled().await;
+        }
         Ok(())
     }
 
@@ -1693,7 +1728,10 @@ mod voice_fallback_tests {
     fn a_tts_rate_limit_restores_native_audio_for_the_rest_of_the_listen_session() {
         let worker = Worker {
             lane: Lane::Listen,
+            provider: SpeechProvider::Gemini,
             cancelled: CancellationToken::new(),
+            revoked: CancellationToken::new(),
+            finished: CancellationToken::new(),
             capture: Arc::new(Capture::new(false)),
             sound: Arc::new(AtomicBool::new(true)),
             tts_unavailable: AtomicBool::new(false),

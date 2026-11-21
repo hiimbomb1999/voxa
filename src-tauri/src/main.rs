@@ -14,7 +14,7 @@ mod vieneu;
 
 use anyhow::Result;
 use serde::Serialize;
-use session::{Lane, Options, State};
+use session::{Lane, Options, SpeechProvider, State};
 #[cfg(target_os = "macos")]
 use std::ffi::{c_char, CStr, CString};
 use std::path::PathBuf;
@@ -133,12 +133,8 @@ fn store_key(key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn forget_key(state: tauri::State<State>) -> Result<(), String> {
-    visible_error(provider::forget_key())?;
-    for lane in [Lane::Listen, Lane::Talk, Lane::Assistant] {
-        state.stop(lane);
-    }
-    Ok(())
+async fn forget_key(state: tauri::State<'_, State>) -> Result<(), String> {
+    visible_error(state.forget_key(SpeechProvider::Gemini).await)
 }
 
 #[tauri::command]
@@ -177,8 +173,8 @@ fn store_soniox_key(key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn forget_soniox_key() -> Result<(), String> {
-    visible_error(soniox::forget_key())
+async fn forget_soniox_key(state: tauri::State<'_, State>) -> Result<(), String> {
+    visible_error(state.forget_key(SpeechProvider::Soniox).await)
 }
 
 #[tauri::command]
