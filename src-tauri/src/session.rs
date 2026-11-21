@@ -5,7 +5,7 @@ use crate::{
     provider, soniox, vieneu,
 };
 use anyhow::{anyhow, bail, Result};
-use futures_util::SinkExt;
+use futures_util::{stream::SplitStream, Sink, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -34,6 +34,7 @@ const MAX_LIVE_PCM_BYTES: usize = 48 * 2_250;
 const LIVE_PCM_CATCH_UP_BYTES: usize = 48 * 1_400;
 const LIVE_VOICE_QUEUE_WAIT: Duration = Duration::from_millis(1_800);
 const LIVE_VOICE_START_LIMIT: Duration = Duration::from_secs(4);
+const LIVE_SEND_MAX_AGE: Duration = Duration::from_millis(600);
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -112,6 +113,7 @@ struct Worker {
     capture: Arc<Capture>,
     sound: Arc<AtomicBool>,
     tts_unavailable: AtomicBool,
+    health: ListenHealth,
     meeting_turn: Arc<PushToTalk>,
     quiet_listen_during_talk: Arc<AtomicBool>,
     mic_sensitivity: MicSensitivity,
@@ -166,6 +168,38 @@ impl MeetingLatency {
             total_ms: total,
             text_wait_ms: text_wait,
             voice_and_output_ms: text_wait.map(|wait| total - wait),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ListenHealth {
+    dropped_input_pcm: AtomicU64,
+    dropped_output_pcm: AtomicU64,
+    skipped_voice_jobs: AtomicU64,
+    peak_audio_queue_ms: AtomicU64,
+    peak_voice_wait_ms: AtomicU64,
+}
+
+#[derive(PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListenHealthReport {
+    input_dropped_ms: u64,
+    audio_dropped_ms: u64,
+    skipped_voice_jobs: u64,
+    peak_audio_queue_ms: u64,
+    peak_voice_wait_ms: u64,
+}
+
+impl ListenHealth {
+    fn report(&self, capture: &Capture, rate: u32) -> ListenHealthReport {
+        ListenHealthReport {
+            input_dropped_ms: self.dropped_input_pcm.load(Relaxed) / 32
+                + capture.dropped_frames.load(Relaxed) * 1_000 / u64::from(rate),
+            audio_dropped_ms: self.dropped_output_pcm.load(Relaxed) / 48,
+            skipped_voice_jobs: self.skipped_voice_jobs.load(Relaxed),
+            peak_audio_queue_ms: self.peak_audio_queue_ms.load(Relaxed),
+            peak_voice_wait_ms: self.peak_voice_wait_ms.load(Relaxed),
         }
     }
 }
@@ -327,6 +361,7 @@ impl State {
             capture: Arc::new(Capture::new(lane != Lane::Listen)),
             sound: Arc::new(AtomicBool::new(options.sound || lane != Lane::Listen)),
             tts_unavailable: AtomicBool::new(false),
+            health: ListenHealth::default(),
             meeting_turn: self.meeting_turn.clone(),
             quiet_listen_during_talk: self.quiet_listen.clone(),
             mic_sensitivity: options.mic_sensitivity,
@@ -560,15 +595,26 @@ async fn run(
         let mut acknowledged = false;
         let result = match tokio::select! {
             _ = worker.cancelled.cancelled() => break,
-            result = LiveSocket::open(service, key, mode, target, worker.lane == Lane::Talk) => result,
+            result = open_live_socket(service, key, mode, target, worker.lane == Lane::Talk) => result,
         } {
-            Ok(mut socket) => {
+            Ok(socket) => {
                 acknowledged = true;
                 worker.capture.clear();
                 worker.capture.ready.store(true, Relaxed);
                 status(app, worker.lane, "ready", &io.output_name);
                 let started = Instant::now();
-                let result = stream(&mut socket, worker, &io, &mut captions, voice).await;
+                let (writer, reader) = socket.split();
+                let (outbound, outgoing) = mpsc::channel(32);
+                let mut live = LiveSocket {
+                    reader,
+                    outbound,
+                    service,
+                    worker,
+                };
+                let result = tokio::select! {
+                    result = stream(&mut live, worker, &io, &mut captions, voice) => result,
+                    result = write_live(writer, outgoing, service, worker.lane, &worker.health.dropped_input_pcm) => result,
+                };
                 if started.elapsed() >= Duration::from_secs(10) || result.is_ok() {
                     attempts = 0;
                 }
@@ -661,64 +707,121 @@ async fn confirm_setup(socket: &mut provider::Socket, mode: Mode, target: &str) 
     .map_err(|_| anyhow!("Gemini chưa xác nhận cấu hình phiên."))?
 }
 
-struct LiveSocket {
-    socket: provider::Socket,
+async fn open_live_socket(
     service: SpeechProvider,
+    key: &str,
+    mode: Mode,
+    target: &str,
+    talk: bool,
+) -> Result<provider::Socket> {
+    match service {
+        SpeechProvider::Gemini => handshake(key, mode, target).await,
+        SpeechProvider::Soniox => soniox::open_stt(key, target, talk).await,
+    }
 }
 
-impl LiveSocket {
-    async fn open(
-        service: SpeechProvider,
-        key: &str,
-        mode: Mode,
-        target: &str,
-        talk: bool,
-    ) -> Result<Self> {
-        let socket = match service {
-            SpeechProvider::Gemini => handshake(key, mode, target).await?,
-            SpeechProvider::Soniox => soniox::open_stt(key, target, talk).await?,
+enum Outbound {
+    Audio(Vec<u8>, Instant),
+    Message(Message),
+    Flush,
+}
+
+async fn write_live(
+    mut writer: impl Sink<Message> + Unpin,
+    mut outgoing: mpsc::Receiver<Outbound>,
+    service: SpeechProvider,
+    lane: Lane,
+    dropped_input_pcm: &AtomicU64,
+) -> Result<()> {
+    while let Some(item) = outgoing.recv().await {
+        let message = match item {
+            Outbound::Audio(chunk, queued) => {
+                if lane == Lane::Listen && queued.elapsed() > LIVE_SEND_MAX_AGE {
+                    dropped_input_pcm.fetch_add(chunk.len() as u64, Relaxed);
+                    continue;
+                }
+                Some(match service {
+                    SpeechProvider::Gemini => {
+                        Message::Text(protocol::input(&chunk).to_string().into())
+                    }
+                    SpeechProvider::Soniox => Message::Binary(chunk.into()),
+                })
+            }
+            Outbound::Message(message) => Some(message),
+            Outbound::Flush => None,
         };
-        Ok(Self { socket, service })
+        let sent = timeout(Duration::from_secs(2), async {
+            match message {
+                Some(message) => writer.send(message).await,
+                None => writer.flush().await,
+            }
+        })
+        .await;
+        if !matches!(sent, Ok(Ok(()))) {
+            bail!("Đường gửi âm thanh tới {} bị gián đoạn.", service.label());
+        }
+    }
+    Ok(())
+}
+
+struct LiveSocket<'a> {
+    reader: SplitStream<provider::Socket>,
+    outbound: mpsc::Sender<Outbound>,
+    service: SpeechProvider,
+    worker: &'a Worker,
+}
+
+impl LiveSocket<'_> {
+    fn send(&self, item: Outbound) -> Result<()> {
+        match self.outbound.try_send(item) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(Outbound::Audio(bytes, _)))
+                if self.worker.lane == Lane::Listen =>
+            {
+                self.worker
+                    .health
+                    .dropped_input_pcm
+                    .fetch_add(bytes.len() as u64, Relaxed);
+                Ok(())
+            }
+            Err(_) => bail!(
+                "Đường gửi tới {} không theo kịp âm thanh.",
+                self.service.label()
+            ),
+        }
     }
 
-    async fn audio(&mut self, chunk: Vec<u8>) -> Result<()> {
+    fn audio(&self, chunk: Vec<u8>) -> Result<()> {
+        self.send(Outbound::Audio(chunk, Instant::now()))
+    }
+
+    fn end_turn(&self) -> Result<()> {
+        let message = match self.service {
+            SpeechProvider::Gemini => Message::Text(protocol::input_end().to_string().into()),
+            SpeechProvider::Soniox => soniox::control("finalize"),
+        };
+        self.send(Outbound::Message(message))
+    }
+
+    async fn receive(&mut self) -> Result<(Vec<Event>, bool)> {
+        let frame = self.reader.next().await.and_then(Result::ok);
+        if matches!(frame, Some(Message::Ping(_))) {
+            self.send(Outbound::Flush)?;
+        }
         match self.service {
-            SpeechProvider::Gemini => {
-                provider::send(&mut self.socket, protocol::input(&chunk)).await
-            }
+            SpeechProvider::Gemini => Ok((protocol::parse(&provider::read_frame(frame)?), false)),
             SpeechProvider::Soniox => {
-                soniox::send(&mut self.socket, Message::Binary(chunk.into())).await
+                let message = soniox::read_frame(frame)?;
+                Ok((soniox::stt_events(&message), message["finished"] == true))
             }
         }
     }
 
-    async fn end_turn(&mut self) -> Result<()> {
-        match self.service {
-            SpeechProvider::Gemini => provider::send(&mut self.socket, protocol::input_end()).await,
-            SpeechProvider::Soniox => soniox::finalize(&mut self.socket).await,
-        }
-    }
-
-    async fn receive(&mut self) -> Result<Vec<Event>> {
-        match self.service {
-            SpeechProvider::Gemini => {
-                Ok(protocol::parse(&provider::receive(&mut self.socket).await?))
-            }
-            SpeechProvider::Soniox => Ok(soniox::receive_stt(&mut self.socket).await?.0),
-        }
-    }
-
-    async fn ping(&mut self) -> Result<()> {
+    fn ping(&self) -> Result<()> {
         if self.service == SpeechProvider::Soniox {
-            return soniox::keepalive(&mut self.socket).await;
+            self.send(Outbound::Message(soniox::control("keepalive")))?;
         }
-        timeout(
-            Duration::from_secs(2),
-            self.socket.send(Message::Ping(Vec::new().into())),
-        )
-        .await
-        .map_err(|_| anyhow!("Gemini ngừng phản hồi."))?
-        .map_err(|_| anyhow!("Mất kết nối với Gemini."))
+        self.send(Outbound::Message(Message::Ping(Vec::new().into())))
     }
 
     async fn finish_soniox(&mut self, tail: Vec<u8>, captions: &mut Captions<'_>) {
@@ -727,11 +830,11 @@ impl LiveSocket {
         }
         let _ = timeout(Duration::from_millis(900), async {
             if !tail.is_empty() {
-                self.audio(tail).await?;
+                self.audio(tail)?;
             }
-            soniox::send(&mut self.socket, Message::Text("".into())).await?;
+            self.send(Outbound::Message(Message::Text("".into())))?;
             loop {
-                let (events, finished) = soniox::receive_stt(&mut self.socket).await?;
+                let (events, finished) = self.receive().await?;
                 for event in events {
                     if let Event::Caption {
                         text,
@@ -752,7 +855,7 @@ impl LiveSocket {
 }
 
 async fn stream(
-    socket: &mut LiveSocket,
+    socket: &mut LiveSocket<'_>,
     worker: &Arc<Worker>,
     io: &AudioIo,
     captions: &mut Captions<'_>,
@@ -794,6 +897,9 @@ async fn stream(
     let mut last_active = None;
     let mut last_translation = None;
     let mut last_frames = worker.capture.frames.load(Relaxed);
+    let initial_drops = worker.capture.dropped_frames.load(Relaxed);
+    let mut last_health = None;
+    let mut health_check = clock;
     let mut last_input = clock;
     let mut current_status = "";
     let mut turn_sent = false;
@@ -827,9 +933,8 @@ async fn stream(
                     break Err(anyhow!("Thiết bị âm thanh đã đổi hoặc bị ngắt. Chọn lại thiết bị, rồi bắt đầu lại."));
                 }
 
-                let latest = (io.rate / 5) as usize;
-                while worker.capture.samples.len() > latest {
-                    worker.capture.samples.pop();
+                if talk && worker.capture.dropped_frames.load(Relaxed) != initial_drops {
+                    bail!("Micro gửi âm thanh quá nhanh. Lượt nói có thể bị thiếu. Hãy nói lại.");
                 }
                 while let Some(sample) = worker.capture.samples.pop() {
                     if !talk || released.is_none() {
@@ -842,7 +947,7 @@ async fn stream(
                             continue;
                         }
                         for chunk in speech.push(chunk) {
-                            socket.audio(chunk).await?;
+                            socket.audio(chunk)?;
                             turn_sent = true;
                             completed = None;
                         }
@@ -850,7 +955,7 @@ async fn stream(
                         if listen {
                             listen_timing.record_input(&chunk);
                         }
-                        socket.audio(chunk).await?;
+                        socket.audio(chunk)?;
                         turn_sent = true;
                     }
                 }
@@ -868,15 +973,15 @@ async fn stream(
                         let _ = captions.app.emit("voxa:notice", "Chưa nhận đủ tiếng nói. Giữ phím lâu hơn hoặc chọn độ nhạy cao hơn.");
                     } else {
                         if !tail.is_empty() {
-                            socket.audio(tail).await?;
+                            socket.audio(tail)?;
                             turn_sent = true;
                             completed = None;
                         }
                         if turn_sent {
                             if talk && service == SpeechProvider::Soniox {
-                                socket.audio(vec![0; 6_400]).await?;
+                                socket.audio(vec![0; 6_400])?;
                             }
-                            socket.end_turn().await?;
+                            socket.end_turn()?;
                             turn_sent = false;
                             if talk {
                                 released = Some(Instant::now());
@@ -939,7 +1044,7 @@ async fn stream(
                     break Err(anyhow!("{provider_name} ngừng phản hồi."));
                 }
                 if now.duration_since(last_ping) > keepalive {
-                    socket.ping().await?;
+                    socket.ping()?;
                     last_ping = now;
                 }
                 if now.duration_since(clock) >= Duration::from_millis(120) {
@@ -962,7 +1067,7 @@ async fn stream(
                     } else if !worker.can_play() && worker.sound.load(Relaxed) {
                         ("listen_quiet", "Đã tạm tắt tiếng trong lượt nói")
                     } else if now.duration_since(last_input) > Duration::from_secs(3) {
-                        ("no_signal", "Mac chưa gửi mẫu âm thanh. Kiểm tra quyền và nguồn đã chọn.")
+                        ("no_signal", "Chưa nhận mẫu âm thanh từ hệ thống. Kiểm tra quyền và nguồn đã chọn.")
                     } else if last_translation.is_some_and(|when| now.duration_since(when) < Duration::from_secs(2)) {
                         ("translating", "Đang dịch")
                     } else if active {
@@ -981,6 +1086,14 @@ async fn stream(
                     });
                     if listen {
                         listen_timing.record_audio(captions.app, &io.playback, now);
+                        if now.duration_since(health_check) >= Duration::from_secs(1) {
+                            health_check = now;
+                            let report = worker.health.report(&worker.capture, io.rate);
+                            if last_health.as_ref() != Some(&report) {
+                                let _ = captions.app.emit("voxa:listen-health", &report);
+                                last_health = Some(report);
+                            }
+                        }
                     }
                     if !talk || released.is_some() {
                         captions.finish_idle(voice_tx().filter(|_| worker.wants_voice()));
@@ -988,7 +1101,7 @@ async fn stream(
                 }
             }
             result = socket.receive() => {
-                let events = result?;
+                let (events, _) = result?;
                 last_response = Instant::now();
                 for event in events {
                     if talk && !turn_sent && released.is_none()
@@ -1027,10 +1140,18 @@ async fn stream(
                                     }
                                     pending_pcm.extend(bytes);
                                 } else if listen {
-                                    if append_live_pcm(&mut pending_pcm, &bytes) && !live_catchup_reported {
-                                        live_catchup_reported = true;
-                                        let _ = captions.app.emit("voxa:notice", "Voxa đã lược âm dịch quá trễ để bám sát video hơn. Nội dung vẫn có trong phụ đề.");
+                                    let offered = pending_pcm.len() + bytes.len();
+                                    if append_live_pcm(&mut pending_pcm, &bytes) {
+                                        worker.health.dropped_output_pcm.fetch_add((offered - pending_pcm.len()) as u64, Relaxed);
+                                        if !live_catchup_reported {
+                                            live_catchup_reported = true;
+                                            let _ = captions.app.emit("voxa:notice", "Voxa đã lược âm dịch quá trễ để bám sát video hơn. Nội dung vẫn có trong phụ đề.");
+                                        }
                                     }
+                                    worker.health.peak_audio_queue_ms.fetch_max(
+                                        (pending_pcm.len() / 48 + io.playback.buffered_millis()) as u64,
+                                        Relaxed,
+                                    );
                                     feed_pending_pcm(&mut pending_pcm, &io.playback, &mut output);
                                 } else {
                                     io.playback.enqueue(&bytes, &mut output);
@@ -1735,6 +1856,7 @@ mod voice_fallback_tests {
             capture: Arc::new(Capture::new(false)),
             sound: Arc::new(AtomicBool::new(true)),
             tts_unavailable: AtomicBool::new(false),
+            health: ListenHealth::default(),
             meeting_turn: Arc::new(PushToTalk::default()),
             quiet_listen_during_talk: Arc::new(AtomicBool::new(false)),
             mic_sensitivity: MicSensitivity::default(),
@@ -1751,6 +1873,120 @@ mod voice_fallback_tests {
         assert!(worker.active_voice(Some(&queue)).is_none());
         assert!(worker.wants_voice());
         assert_eq!(worker.active_voice(Some("Kore")), None);
+    }
+}
+
+#[cfg(test)]
+mod live_transport_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_busy_writer_does_not_block_playback_or_drop_fresh_input() {
+        let (sender, outgoing) = mpsc::channel(32);
+        let (received, mut frames) = mpsc::unbounded_channel();
+        let (started, mut writes) = mpsc::unbounded_channel();
+        let allow_write = Arc::new(tokio::sync::Notify::new());
+        let gate = allow_write.clone();
+        let sink = Box::pin(futures_util::sink::unfold(
+            received,
+            move |received, frame| {
+                let gate = gate.clone();
+                let started = started.clone();
+                async move {
+                    started.send(()).unwrap();
+                    gate.notified().await;
+                    received.send(frame).unwrap();
+                    Ok::<_, anyhow::Error>(received)
+                }
+            },
+        ));
+        let dropped = AtomicU64::new(0);
+        let writer = write_live(
+            sink,
+            outgoing,
+            SpeechProvider::Soniox,
+            Lane::Listen,
+            &dropped,
+        );
+        let playback_client = async move {
+            sender
+                .try_send(Outbound::Audio(vec![1; 3_200], Instant::now()))
+                .unwrap();
+            writes.recv().await.unwrap();
+            // The first write remains stalled while the session can process output and accept input.
+            let playback = Playback::new(24_000);
+            playback.enqueue(&[0xff, 0x7f], &mut playback.resampler());
+            assert!(playback.pop() > 0.9);
+            sender
+                .try_send(Outbound::Audio(vec![2; 3_200], Instant::now()))
+                .unwrap();
+            let wake = Instant::now() + Duration::from_millis(400);
+            tokio::time::sleep_until(wake).await;
+            allow_write.notify_one();
+            assert_eq!(
+                frames.recv().await,
+                Some(Message::Binary(vec![1; 3_200].into()))
+            );
+            writes.recv().await.unwrap();
+            allow_write.notify_one();
+            assert_eq!(
+                frames.recv().await,
+                Some(Message::Binary(vec![2; 3_200].into()))
+            );
+        };
+        let (result, ()) = timeout(Duration::from_secs(3), async {
+            tokio::join!(writer, playback_client)
+        })
+        .await
+        .unwrap();
+        result.unwrap();
+        assert_eq!(dropped.load(Relaxed), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn over_fifteen_minutes_only_fresh_audio_is_sent_and_drops_are_counted() {
+        let (sender, outgoing) = mpsc::channel(32);
+        let (received, mut frames) = mpsc::unbounded_channel();
+        let sink = Box::pin(futures_util::sink::unfold(
+            received,
+            |received, frame| async move {
+                received.send(frame).unwrap();
+                Ok::<_, anyhow::Error>(received)
+            },
+        ));
+        let dropped = AtomicU64::new(0);
+        let start = Instant::now();
+        let writer = write_live(
+            sink,
+            outgoing,
+            SpeechProvider::Soniox,
+            Lane::Listen,
+            &dropped,
+        );
+        let simulated_session = async move {
+            for minute in 0..15u8 {
+                let audio = vec![minute; 3_200];
+                if minute % 3 == 0 {
+                    let stale = start - Duration::from_millis(700);
+                    sender
+                        .send(Outbound::Audio(vec![255; 3_200], stale))
+                        .await
+                        .unwrap();
+                }
+                sender
+                    .send(Outbound::Audio(audio.clone(), Instant::now()))
+                    .await
+                    .unwrap();
+                assert_eq!(frames.recv().await, Some(Message::Binary(audio.into())));
+            }
+        };
+        let (result, ()) = timeout(Duration::from_secs(16 * 60), async {
+            tokio::join!(writer, simulated_session)
+        })
+        .await
+        .unwrap();
+        result.unwrap();
+        assert_eq!(dropped.load(Relaxed) / 32, 500);
     }
 }
 

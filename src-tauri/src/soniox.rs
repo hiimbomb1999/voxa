@@ -135,27 +135,28 @@ fn text(value: Value) -> Message {
 }
 
 async fn receive(socket: &mut Socket) -> Result<Value> {
-    loop {
-        return match socket.next().await {
-            Some(Ok(Message::Text(frame))) => {
-                let result: Value = serde_json::from_str(&frame)
-                    .map_err(|_| anyhow!("Soniox trả về sự kiện không hợp lệ."))?;
-                if let Some(code) = result["error_code"].as_u64() {
-                    return Err(ServiceError(code).into());
-                }
-                Ok(result)
+    let frame = socket.next().await.and_then(Result::ok);
+    if matches!(frame, Some(Message::Ping(_))) {
+        timeout(Duration::from_secs(2), socket.flush())
+            .await
+            .map_err(|_| anyhow!("Soniox ngừng phản hồi."))?
+            .map_err(|_| anyhow!("Mất kết nối với Soniox."))?;
+    }
+    read_frame(frame)
+}
+
+pub fn read_frame(frame: Option<Message>) -> Result<Value> {
+    match frame {
+        Some(Message::Text(frame)) => {
+            let result: Value = serde_json::from_str(&frame)
+                .map_err(|_| anyhow!("Soniox trả về sự kiện không hợp lệ."))?;
+            if let Some(code) = result["error_code"].as_u64() {
+                return Err(ServiceError(code).into());
             }
-            Some(Ok(Message::Pong(_))) => Ok(Value::Null),
-            Some(Ok(Message::Ping(_))) => {
-                timeout(Duration::from_secs(2), socket.flush())
-                    .await
-                    .map_err(|_| anyhow!("Soniox ngừng phản hồi."))?
-                    .map_err(|_| anyhow!("Mất kết nối với Soniox."))?;
-                Ok(Value::Null)
-            }
-            Some(Ok(Message::Frame(_))) => continue,
-            _ => bail!("Soniox đã đóng kết nối."),
-        };
+            Ok(result)
+        }
+        Some(Message::Pong(_) | Message::Ping(_) | Message::Frame(_)) => Ok(Value::Null),
+        _ => bail!("Soniox đã đóng kết nối."),
     }
 }
 
@@ -183,16 +184,11 @@ pub async fn open_stt(key: &str, language: &str, talk: bool) -> Result<Socket> {
     Ok(socket)
 }
 
-pub async fn finalize(socket: &mut Socket) -> Result<()> {
-    send(socket, text(json!({"type":"finalize"}))).await
+pub fn control(kind: &str) -> Message {
+    text(json!({"type": kind}))
 }
 
-pub async fn keepalive(socket: &mut Socket) -> Result<()> {
-    send(socket, text(json!({"type":"keepalive"}))).await?;
-    send(socket, Message::Ping(Vec::new().into())).await
-}
-
-fn stt_events(message: &Value) -> Vec<Event> {
+pub fn stt_events(message: &Value) -> Vec<Event> {
     let Some(tokens) = message["tokens"].as_array() else {
         return Vec::new();
     };
@@ -234,7 +230,8 @@ fn stt_events(message: &Value) -> Vec<Event> {
     events
 }
 
-pub async fn receive_stt(socket: &mut Socket) -> Result<(Vec<Event>, bool)> {
+#[cfg(test)]
+async fn receive_stt(socket: &mut Socket) -> Result<(Vec<Event>, bool)> {
     let message = receive(socket).await?;
     Ok((stt_events(&message), message["finished"] == true))
 }
@@ -361,7 +358,7 @@ mod tests {
         send(&mut socket, Message::Binary(vec![0; 640].into()))
             .await
             .unwrap();
-        finalize(&mut socket).await.unwrap();
+        send(&mut socket, control("finalize")).await.unwrap();
         let (events, finished) = receive_stt(&mut socket).await.unwrap();
         assert!(!finished);
         assert!(events.contains(&Event::TurnComplete));

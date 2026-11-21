@@ -186,6 +186,7 @@ pub struct Capture {
     pub ready: AtomicBool,
     pub pressed: AtomicBool,
     pub frames: AtomicU64,
+    pub dropped_frames: AtomicU64,
     peak: AtomicU32,
     gated: bool,
 }
@@ -201,6 +202,7 @@ impl Capture {
             ready: AtomicBool::new(false),
             pressed: AtomicBool::new(false),
             frames: AtomicU64::new(0),
+            dropped_frames: AtomicU64::new(0),
             peak: AtomicU32::new(0),
             gated,
         }
@@ -227,11 +229,15 @@ impl Capture {
         let capture = self.ready.load(Relaxed);
         let count = frames.len();
         let mut peak = 0.0_f32;
+        let mut dropped = 0;
         for mono in frames {
             peak = peak.max(mono.abs());
-            if capture {
-                self.samples.force_push(mono);
+            if capture && self.samples.force_push(mono).is_some() {
+                dropped += 1;
             }
+        }
+        if dropped != 0 {
+            self.dropped_frames.fetch_add(dropped, Relaxed);
         }
         self.peak.fetch_max(peak.to_bits(), Relaxed);
         self.frames.fetch_add(count as u64, Relaxed);

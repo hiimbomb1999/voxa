@@ -35,5 +35,8 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 rfd = { version = "0.15", default-features = false }
 wasapi = "0.27"
 
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

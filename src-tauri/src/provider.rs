@@ -96,27 +96,27 @@ impl std::fmt::Display for LivePolicyClose {
 impl std::error::Error for LivePolicyClose {}
 
 pub async fn receive(socket: &mut Socket) -> Result<Value> {
-    loop {
-        let bytes = match socket.next().await {
-            Some(Ok(Message::Text(value))) => return parse_message(value.as_bytes()),
-            Some(Ok(Message::Binary(value))) => value,
-            Some(Ok(Message::Ping(_))) => {
-                timeout(Duration::from_secs(2), socket.flush())
-                    .await
-                    .map_err(|_| anyhow!("Gemini ngừng phản hồi."))?
-                    .map_err(|_| anyhow!("Không giữ được kết nối Gemini."))?;
-                return Ok(Value::Null);
-            }
-            Some(Ok(Message::Pong(_))) => return Ok(Value::Null),
-            Some(Ok(Message::Frame(_))) => continue,
-            Some(Ok(Message::Close(frame))) => match frame.map(|frame| u16::from(frame.code)) {
-                Some(1008) => return Err(LivePolicyClose.into()),
-                Some(code) => bail!("Gemini đã đóng kết nối ({code})."),
-                None => bail!("Gemini đã đóng kết nối."),
-            },
-            _ => bail!("Mất kết nối với Gemini."),
-        };
-        return parse_message(&bytes);
+    let frame = socket.next().await.and_then(Result::ok);
+    if matches!(frame, Some(Message::Ping(_))) {
+        timeout(Duration::from_secs(2), socket.flush())
+            .await
+            .map_err(|_| anyhow!("Gemini ngừng phản hồi."))?
+            .map_err(|_| anyhow!("Không giữ được kết nối Gemini."))?;
+    }
+    read_frame(frame)
+}
+
+pub fn read_frame(frame: Option<Message>) -> Result<Value> {
+    match frame {
+        Some(Message::Text(value)) => parse_message(value.as_bytes()),
+        Some(Message::Binary(value)) => parse_message(&value),
+        Some(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => Ok(Value::Null),
+        Some(Message::Close(frame)) => match frame.map(|frame| u16::from(frame.code)) {
+            Some(1008) => Err(LivePolicyClose.into()),
+            Some(code) => bail!("Gemini đã đóng kết nối ({code})."),
+            None => bail!("Gemini đã đóng kết nối."),
+        },
+        None => bail!("Mất kết nối với Gemini."),
     }
 }
 

@@ -355,8 +355,18 @@ function showListenLatency({ captionMs, audioMs }) {
   if (Number.isFinite(captionMs)) measurements.push(`Phụ đề ${millis(captionMs)}`);
   if (Number.isFinite(audioMs)) measurements.push(`Giọng dịch ${millis(audioMs)}`);
   message("listen-latency", measurements.length
-    ? `Từ lúc gửi âm gốc có tín hiệu · ${measurements.join(" · ")}`
+    ? `Lần đầu từ lúc gửi âm gốc có tín hiệu · ${measurements.join(" · ")}`
     : "");
+}
+
+function showListenHealth({ inputDroppedMs, audioDroppedMs, skippedVoiceJobs, peakAudioQueueMs, peakVoiceWaitMs }) {
+  const measurements = [];
+  if (peakAudioQueueMs) measurements.push(`Hàng phát cao nhất ${millis(peakAudioQueueMs)}`);
+  if (peakVoiceWaitMs) measurements.push(`Chờ đọc lâu nhất ${millis(peakVoiceWaitMs)}`);
+  if (inputDroppedMs) measurements.push(`Âm gốc bỏ qua ${millis(inputDroppedMs)}`);
+  if (audioDroppedMs) measurements.push(`Âm dịch bỏ qua ${millis(audioDroppedMs)}`);
+  if (skippedVoiceJobs) measurements.push(`${skippedVoiceJobs} lượt đọc bị bỏ hoặc lỗi`);
+  message("listen-health", measurements.join(" · "));
 }
 
 function showMeetingLatency({ engine, totalMs, textWaitMs, voiceAndOutputMs }) {
@@ -539,6 +549,7 @@ async function toggleLane(lane) {
   if (lane === "listen") {
     message("listen-route", "");
     message("listen-latency", "");
+    message("listen-health", "");
     message("duck-test-result", "");
   }
   if (lane !== "assistant" && !heard()) clearCaptions();
@@ -817,6 +828,7 @@ async function initialize() {
     api.event.listen("voxa:caption", (event) => renderCaption(event.payload)),
     api.event.listen("voxa:microphone-test", ({ payload }) => updateLevel("talk", payload)),
     api.event.listen("voxa:listen-latency", ({ payload }) => showListenLatency(payload)),
+    api.event.listen("voxa:listen-health", ({ payload }) => showListenHealth(payload)),
     api.event.listen("voxa:meeting-latency", ({ payload }) => showMeetingLatency(payload)),
     api.event.listen("voxa:signal", ({ payload }) => updateLevel(payload.lane, payload.peak, payload.outputPeak)),
     api.event.listen("voxa:notice", (event) => message("message", event.payload)),
