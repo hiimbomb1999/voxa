@@ -89,10 +89,9 @@ fn capture_system(
         let _ = event.wait_for_event(100);
         while !stop.load(Relaxed) && source.get_next_packet_size()?.unwrap_or(0) > 0 {
             source.read_from_device_to_deque(&mut packet)?;
-            capture.write_mono(packet.make_contiguous().chunks_exact(8).map(|frame| {
-                let left = f32::from_le_bytes(frame[..4].try_into().unwrap());
-                let right = f32::from_le_bytes(frame[4..].try_into().unwrap());
-                (left + right) * 0.5
+            let samples = packet.make_contiguous().as_chunks::<4>().0;
+            capture.write_mono(samples.as_chunks::<2>().0.iter().map(|[left, right]| {
+                (f32::from_le_bytes(*left) + f32::from_le_bytes(*right)) * 0.5
             }));
             packet.clear();
         }
