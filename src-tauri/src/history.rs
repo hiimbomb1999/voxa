@@ -41,6 +41,13 @@ pub struct Saved {
     preview: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Page {
+    sessions: Vec<Saved>,
+    next_before: Option<i64>,
+}
+
 pub struct History(Mutex<Connection>);
 
 pub fn timestamp() -> i64 {
@@ -107,23 +114,37 @@ impl History {
         Ok(())
     }
 
-    pub fn list(&self) -> Result<Vec<Saved>> {
+    pub fn list(&self, before: Option<i64>) -> Result<Page> {
+        const PAGE_SIZE: usize = 30;
         let db = self.connection()?;
         let mut query = db.prepare(
             "SELECT s.id, s.started_at, count(c.id),
                     COALESCE((SELECT substr(text, 1, 100) FROM captions WHERE session_id=s.id ORDER BY id LIMIT 1),s.title)
              FROM sessions s JOIN captions c ON c.session_id=s.id
-             GROUP BY s.id ORDER BY s.id DESC LIMIT 100",
+             WHERE s.id < ?1 GROUP BY s.id ORDER BY s.id DESC LIMIT ?2",
         )?;
-        let rows = query.query_map([], |row| {
-            Ok(Saved {
-                id: row.get(0)?,
-                started_at: row.get(1)?,
-                count: row.get(2)?,
-                preview: row.get(3)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let rows = query.query_map(
+            params![before.unwrap_or(i64::MAX), PAGE_SIZE as i64 + 1],
+            |row| {
+                Ok(Saved {
+                    id: row.get(0)?,
+                    started_at: row.get(1)?,
+                    count: row.get(2)?,
+                    preview: row.get(3)?,
+                })
+            },
+        )?;
+        let mut sessions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let next_before = if sessions.len() > PAGE_SIZE {
+            sessions.truncate(PAGE_SIZE);
+            sessions.last().map(|session| session.id)
+        } else {
+            None
+        };
+        Ok(Page {
+            sessions,
+            next_before,
+        })
     }
 
     pub fn entries(&self, id: i64) -> Result<Vec<Entry>> {
@@ -224,6 +245,37 @@ mod tests {
         let session = history.create("New session").unwrap();
         assert!(history.delete(session.id, session.started_at - 1).is_err());
         assert!(history.delete(session.id, session.started_at).is_ok());
+    }
+
+    #[test]
+    fn history_cursor_reaches_old_sessions_after_a_new_session_is_added() {
+        let history = History::from_connection(Connection::open_in_memory().unwrap()).unwrap();
+        let caption = Caption {
+            id: 1,
+            lane: "listen",
+            translation: true,
+            text: "Test".into(),
+            start_ms: 0,
+            end_ms: 500,
+            finished: true,
+        };
+        for _ in 0..105 {
+            let session = history.create("Test").unwrap();
+            history.append(session, &caption).unwrap();
+        }
+        let mut page = history.list(None).unwrap();
+        let newest = page.sessions[0].id;
+        let later = history.create("Later").unwrap();
+        history.append(later, &caption).unwrap();
+        let mut ids = Vec::new();
+        loop {
+            ids.extend(page.sessions.iter().map(|session| session.id));
+            let Some(cursor) = page.next_before else {
+                break;
+            };
+            page = history.list(Some(cursor)).unwrap();
+        }
+        assert_eq!(ids, (1..=newest).rev().collect::<Vec<_>>());
     }
 
     #[test]

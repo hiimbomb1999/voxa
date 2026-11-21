@@ -51,6 +51,7 @@ let returnToListen = false;
 let currentSession;
 let historyVersion = 0;
 let historyListVersion = 0;
+let historyBefore = null;
 let deletingHistory = false;
 const heard = () => activeStates.has(statuses.listen) || activeStates.has(statuses.talk);
 const providerFor = (lane) => lane === "assistant" ? "gemini" : get("speech-provider").value;
@@ -75,7 +76,7 @@ function node(tag, text, className) {
   return element;
 }
 
-const preferenceIds = ["speech-provider", "duck-original", "language", "microphone", "speaker", "blackhole", "talk-voice", "listen-voice", "mic-sensitivity", "quiet-listen"];
+const preferenceIds = ["speech-provider", "duck-original", "language", "microphone", "speaker", "blackhole", "talk-voice", "listen-voice", "mic-sensitivity", "quiet-listen", "save-history"];
 let preferences = {};
 try { preferences = JSON.parse(localStorage.getItem("voxa-audio-settings")) || {}; } catch {}
 
@@ -650,18 +651,22 @@ const historyDate = new Intl.DateTimeFormat("vi", { dateStyle: "medium", timeSty
 const isSelectedSession = (session) =>
   currentSession?.id === session.id && currentSession.started_at === session.started_at;
 
-async function showHistory() {
+async function showHistory(before = null) {
   if (!api) return;
+  const more = get("history-more");
+  more.disabled = true;
   const version = ++historyListVersion;
   try {
-    const sessions = await invoke("history_list");
+    const { sessions, nextBefore } = await invoke("history_list", { before });
     if (version !== historyListVersion) return;
     const list = get("history-list");
-    if (!sessions.length) {
-      list.replaceChildren(node("li", "Chưa có transcript đã lưu.", "placeholder"));
-      return;
+    if (before === null) list.replaceChildren();
+    historyBefore = nextBefore;
+    more.hidden = nextBefore === null;
+    if (!sessions.length && !list.children.length) {
+      list.append(node("li", "Chưa có transcript đã lưu.", "placeholder"));
     }
-    list.replaceChildren(...sessions.map((session) => {
+    list.append(...sessions.map((session) => {
       const item = node("li", "", "history-row");
       const date = historyDate.format(session.started_at);
       const button = node("button", "", "history-select");
@@ -677,6 +682,8 @@ async function showHistory() {
     }));
   } catch (error) {
     if (version === historyListVersion) message("history-message", errorText(error));
+  } finally {
+    if (version === historyListVersion) more.disabled = false;
   }
 }
 
@@ -727,7 +734,9 @@ async function deleteHistorySession(session) {
       get("summary").hidden = true;
     }
     message("history-message", "Đã xóa phiên.");
-    await showHistory();
+    const list = get("history-list");
+    list.querySelector(`.history-select[data-id="${session.id}"]`)?.closest(".history-row")?.remove();
+    if (!list.children.length) await showHistory(historyBefore);
     if (!get("history").hidden && document.activeElement === document.body) {
       (get("history-list").querySelector(".history-select") || get("reload-history")).focus({ preventScroll: true });
     }
@@ -739,7 +748,8 @@ async function deleteHistorySession(session) {
 }
 
 function bindHistory() {
-  get("reload-history").addEventListener("click", showHistory);
+  get("reload-history").addEventListener("click", () => void showHistory());
+  get("history-more").addEventListener("click", () => void showHistory(historyBefore));
   get("export").addEventListener("click", async () => {
     if (!currentSession) return;
     const button = get("export");

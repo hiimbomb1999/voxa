@@ -230,8 +230,8 @@ fn set_overlay(app: &AppHandle, show: bool) -> Result<()> {
 }
 
 #[tauri::command]
-fn history_list(state: tauri::State<State>) -> Result<Vec<history::Saved>, String> {
-    visible_error(state.history.list())
+fn history_list(state: tauri::State<State>, before: Option<i64>) -> Result<history::Page, String> {
+    visible_error(state.history.list(before))
 }
 
 #[tauri::command]

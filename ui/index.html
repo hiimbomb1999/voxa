@@ -161,11 +161,14 @@
       <div class="title-row"><div><h1 id="history-title" tabindex="-1">Lịch sử</h1><p>Transcript đã lưu trên máy.</p></div><button class="secondary" id="reload-history">Làm mới</button></div>
       <p id="history-message" class="message" role="status" hidden></p>
       <div class="history-layout">
-        <ul id="history-list" class="history-list" aria-label="Phiên đã lưu"></ul>
+        <div>
+          <ul id="history-list" class="history-list" aria-label="Phiên đã lưu"></ul>
+          <button class="plain full" id="history-more" type="button" hidden>Xem phiên cũ hơn</button>
+        </div>
         <section class="history-detail">
           <div class="panel-heading"><h2 id="history-session-title">Chọn một phiên</h2></div>
           <div id="history-actions" class="history-actions" hidden>
-            <label class="compact"><span class="sr-only">Định dạng xuất</span><select id="format"><option value="txt">TXT</option><option value="srt">SRT</option><option value="md">Markdown</option></select></label>
+            <label class="compact"><span class="sr-only">Định dạng xuất</span><select id="format"><option value="txt">TXT</option><option value="srt">SRT · Thời gian phiên Voxa</option><option value="md">Markdown</option></select></label>
             <button class="secondary" id="export">Xuất transcript</button>
             <button class="secondary" id="summarize">Tóm tắt cuộc họp</button>
             <button class="plain danger" id="delete">Xóa</button>
