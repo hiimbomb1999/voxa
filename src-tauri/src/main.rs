@@ -1,4 +1,10 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod audio;
+mod credentials;
 mod history;
 mod meeting;
 mod provider;
@@ -9,10 +15,13 @@ mod vieneu;
 use anyhow::Result;
 use serde::Serialize;
 use session::{Lane, Options, State};
+#[cfg(target_os = "macos")]
 use std::ffi::{c_char, CStr, CString};
+use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+#[cfg(target_os = "macos")]
 extern "C" {
     fn voxa_save_dialog(suggested: *const c_char) -> *mut c_char;
     fn voxa_free_string(value: *mut c_char);
@@ -110,7 +119,7 @@ async fn test_blackhole_loopback(
         visible_error(audio::test_blackhole_loopback(&device, speaker.as_deref()))
     })
     .await
-    .map_err(|_| "Không thể hoàn tất phép thử BlackHole.".to_owned())?
+    .map_err(|_| format!("Không thể hoàn tất phép thử {}.", audio::MEETING_DEVICE))?
 }
 
 #[tauri::command]
@@ -256,33 +265,51 @@ async fn export_session(
         return Err("Phiên chưa có transcript.".into());
     }
     let text = visible_error(history::render(&entries, &format))?;
-    let name = CString::new(format!("voxa-{id}.{format}"))
-        .map_err(|_| "Tên file không hợp lệ.".to_owned())?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
-        let raw = unsafe { voxa_save_dialog(name.as_ptr()) };
-        let path = if raw.is_null() {
-            None
-        } else {
-            use std::os::unix::ffi::OsStrExt;
-            let bytes = unsafe { CStr::from_ptr(raw) }.to_bytes();
-            let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes));
-            unsafe { voxa_free_string(raw) };
-            Some(path)
-        };
-        let _ = tx.send(path);
-    })
-    .map_err(|_| "Không mở được hộp thoại lưu file.".to_owned())?;
-    if let Some(path) = rx
-        .await
-        .map_err(|_| "Không nhận được đường dẫn xuất file.".to_owned())?
-    {
+    let filename = format!("voxa-{id}.{format}");
+    if let Some(path) = transcript_destination(app, filename).await? {
         std::fs::write(path, text)
             .map_err(|error| format!("Không lưu được transcript. {error}"))?;
         Ok(Exported { saved: true })
     } else {
         Ok(Exported { saved: false })
     }
+}
+
+#[cfg(target_os = "macos")]
+async fn transcript_destination(
+    app: AppHandle,
+    filename: String,
+) -> Result<Option<PathBuf>, String> {
+    let filename = CString::new(filename).map_err(|_| "Tên file không hợp lệ.".to_owned())?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let raw = unsafe { voxa_save_dialog(filename.as_ptr()) };
+        let path = if raw.is_null() {
+            None
+        } else {
+            use std::os::unix::ffi::OsStrExt;
+            let bytes = unsafe { CStr::from_ptr(raw) }.to_bytes();
+            let path = PathBuf::from(std::ffi::OsStr::from_bytes(bytes));
+            unsafe { voxa_free_string(raw) };
+            Some(path)
+        };
+        let _ = tx.send(path);
+    })
+    .map_err(|_| "Không mở được hộp thoại lưu file.".to_owned())?;
+    rx.await
+        .map_err(|_| "Không nhận được đường dẫn xuất file.".to_owned())
+}
+
+#[cfg(target_os = "windows")]
+async fn transcript_destination(
+    app: AppHandle,
+    filename: String,
+) -> Result<Option<PathBuf>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_file_name(filename);
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    Ok(dialog.save_file().await.map(|file| file.path().to_owned()))
 }
 
 #[tauri::command]

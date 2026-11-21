@@ -14,23 +14,11 @@ use tokio_tungstenite::{
 
 const LIVE: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const INTERACTIONS: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const KEYCHAIN: &str = "local.voxa.translate";
+const ACCOUNT: &str = "gemini-api-key";
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub fn load_key() -> Result<Option<String>> {
-    use security_framework::passwords::get_generic_password;
-    match get_generic_password(KEYCHAIN, "gemini-api-key") {
-        Ok(bytes) => {
-            Ok(Some(String::from_utf8(bytes).map_err(|_| {
-                anyhow!("API key trong Keychain không hợp lệ.")
-            })?))
-        }
-        Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) if matches!(error.code(), -128 | -25293 | -25308) => Err(anyhow!(
-            "macOS chưa cho Voxa đọc API key. Vào Cài đặt → Kiểm tra kết nối Live và cho phép nếu Keychain hỏi."
-        )),
-        Err(error) => Err(anyhow!("Không đọc được API key từ macOS Keychain ({}).", error.code())),
-    }
+    crate::credentials::load(ACCOUNT)
 }
 
 fn checked_api_key(key: &str) -> Result<&str> {
@@ -46,18 +34,11 @@ fn checked_api_key(key: &str) -> Result<&str> {
 }
 
 pub fn save_key(key: &str) -> Result<()> {
-    let key = checked_api_key(key)?;
-    security_framework::passwords::set_generic_password(KEYCHAIN, "gemini-api-key", key.as_bytes())
-        .map_err(|_| anyhow!("Không ghi được API key vào macOS Keychain."))
+    crate::credentials::store(ACCOUNT, checked_api_key(key)?)
 }
 
 pub fn forget_key() -> Result<()> {
-    use security_framework::passwords::delete_generic_password;
-    match delete_generic_password(KEYCHAIN, "gemini-api-key") {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(_) => Err(anyhow!("Không xóa được API key trong macOS Keychain.")),
-    }
+    crate::credentials::forget(ACCOUNT)
 }
 
 fn live_request(key: &str) -> Result<Request> {

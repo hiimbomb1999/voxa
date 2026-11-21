@@ -11,7 +11,6 @@ use tokio_tungstenite::{
 };
 use voxa::protocol::Event;
 
-const KEYCHAIN: &str = "local.voxa.translate";
 const ACCOUNT: &str = "soniox-api-key";
 const STT: &str = "wss://stt-rt.soniox.com/transcribe-websocket";
 const TTS: &str = "wss://tts-rt.soniox.com/tts-websocket";
@@ -29,19 +28,7 @@ pub fn supports_language(code: &str) -> bool {
 }
 
 pub fn load_key() -> Result<Option<String>> {
-    use security_framework::passwords::get_generic_password;
-    match get_generic_password(KEYCHAIN, ACCOUNT) {
-        Ok(bytes) => {
-            Ok(Some(String::from_utf8(bytes).map_err(|_| {
-                anyhow!("Soniox API key đã lưu không hợp lệ.")
-            })?))
-        }
-        Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) => bail!(
-            "Không đọc được Soniox API key từ macOS Keychain ({}).",
-            error.code()
-        ),
-    }
+    crate::credentials::load(ACCOUNT)
 }
 
 pub fn store_key(key: &str) -> Result<()> {
@@ -49,25 +36,11 @@ pub fn store_key(key: &str) -> Result<()> {
     if !(12..=512).contains(&key.len()) || !key.bytes().all(|byte| byte.is_ascii_graphic()) {
         bail!("Soniox API key không đúng định dạng.");
     }
-    security_framework::passwords::set_generic_password(KEYCHAIN, ACCOUNT, key.as_bytes()).map_err(
-        |error| {
-            anyhow!(
-                "Không lưu được Soniox API key vào macOS Keychain ({}).",
-                error.code()
-            )
-        },
-    )
+    crate::credentials::store(ACCOUNT, key)
 }
 
 pub fn forget_key() -> Result<()> {
-    match security_framework::passwords::delete_generic_password(KEYCHAIN, ACCOUNT) {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(error) => bail!(
-            "Không xóa được Soniox API key khỏi macOS Keychain ({}).",
-            error.code()
-        ),
-    }
+    crate::credentials::forget(ACCOUNT)
 }
 
 pub async fn check_key(key: &str) -> Result<()> {

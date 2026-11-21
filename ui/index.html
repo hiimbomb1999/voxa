@@ -77,17 +77,17 @@
               <label class="switch"><input type="checkbox" id="listen-sound" checked> Phát giọng dịch</label>
               <button class="plain disclosure" id="playback-toggle" type="button" aria-expanded="false" aria-controls="playback-options">Tùy chọn phát <span aria-hidden="true"></span></button>
             </div>
-            <div class="duck-option">
+            <div class="duck-option" data-mac-only>
               <label class="switch"><input type="checkbox" id="duck-original" aria-describedby="duck-help" checked> Giảm tiếng gốc khi phát bản dịch</label>
               <p class="hint" id="duck-help">Chọn ứng dụng làm nguồn nếu chỉ muốn hạ tiếng của ứng dụng đó.</p>
             </div>
             <div class="reveal" id="playback-options" hidden>
               <div class="field-row">
-                <label>Phát qua<select id="speaker"><option value="">Mặc định của Mac</option></select></label>
+                <label>Phát qua<select id="speaker"><option value="">Mặc định hệ thống</option></select></label>
                 <label>Giọng dịch<select id="listen-voice"><option value="">Trực tiếp · Độ trễ thấp</option><optgroup label="Gemini" id="listen-gemini"><option>Kore</option><option>Puck</option><option>Charon</option><option>Aoede</option><option>Zephyr</option></optgroup><optgroup label="VieNeu-TTS · Trên Mac" id="listen-local" hidden></optgroup></select></label>
               </div>
               <button class="plain" id="listen-preview" type="button" hidden>Nghe thử giọng</button>
-              <button class="plain" id="test-listen-ducking" type="button" aria-describedby="duck-test-result">Thử giảm tiếng gốc</button>
+              <button class="plain" id="test-listen-ducking" data-mac-only type="button" aria-describedby="duck-test-result">Thử giảm tiếng gốc</button>
               <p class="hint" id="duck-test-result" role="status" hidden></p>
               <p class="hint" id="listen-route" hidden></p>
               <p class="hint" id="listen-latency" role="status" hidden></p>
@@ -102,8 +102,8 @@
             </div>
             <meter id="talk-meter" min="0" max="1" value="0" aria-label="Mức tín hiệu micro"></meter>
             <div class="route-empty" id="route-empty">
-              <strong id="route-state">Đang kiểm tra BlackHole</strong>
-              <p id="route-help">Voxa dùng BlackHole để gửi tiếng Anh vào Meet hoặc Zoom.</p>
+              <strong id="route-state">Đang kiểm tra thiết bị</strong>
+              <p id="route-help">Voxa dùng cáp âm thanh ảo để gửi tiếng Anh vào Meet hoặc Zoom.</p>
               <button class="plain" id="routing-refresh" type="button">Làm mới thiết bị</button>
             </div>
             <div id="talk-route" hidden>
@@ -126,15 +126,15 @@
                     <div><dt>VieNeu-TTS</dt><dd id="latency-vieneu" aria-label="Chưa có số đo">—</dd></div>
                   </dl>
                   <p id="latency-breakdown" class="hint" hidden></p>
-                  <p class="hint">Lượt gần nhất của mỗi giọng, đo đến ngõ ra BlackHole trên Mac.</p>
+                  <p class="hint" id="latency-location"></p>
                   <span id="latency-announcement" class="sr-only" role="status"></span>
                 </div>
-                <p class="hint">Thử trước khi vào họp. Hai tiếng bíp thu từ BlackHole sẽ phát lại qua loa hoặc tai nghe.</p>
+                <p class="hint" id="loopback-help"></p>
               </details>
               <details class="meeting-options" id="meeting-setup">
                 <summary>Thiết bị, giọng và chống vọng</summary>
                 <div class="field-row">
-                  <label>Micro của bạn<select id="microphone"><option value="">Mặc định của Mac</option></select></label>
+                  <label>Micro của bạn<select id="microphone"><option value="">Mặc định hệ thống</option></select></label>
                   <label>Gửi qua<select id="blackhole"></select></label>
                 </div>
                 <div id="talk-voices" class="field-row" hidden>
@@ -149,7 +149,7 @@
                   </select>
                 </label>
                 <label class="switch"><input id="quiet-listen" type="checkbox" checked> Tạm tắt tiếng chiều nghe trong lượt nói</label>
-                <p class="hint">Trong Meet hoặc Zoom, chọn BlackHole làm micro và tai nghe làm loa.</p>
+                <p class="hint" id="meeting-microphone-help"></p>
                 <p class="hint">Chọn loa nghe lại ở <button type="button" class="plain inline-action" id="choose-monitor">Tùy chọn phát</button>.</p>
               </details>
             </div>
@@ -158,7 +158,7 @@
       </div>
     </section>
     <section id="history" class="view" hidden aria-labelledby="history-title">
-      <div class="title-row"><div><h1 id="history-title" tabindex="-1">Lịch sử</h1><p>Transcript đã lưu trên Mac.</p></div><button class="secondary" id="reload-history">Làm mới</button></div>
+      <div class="title-row"><div><h1 id="history-title" tabindex="-1">Lịch sử</h1><p>Transcript đã lưu trên máy.</p></div><button class="secondary" id="reload-history">Làm mới</button></div>
       <p id="history-message" class="message" role="status" hidden></p>
       <div class="history-layout">
         <ul id="history-list" class="history-list" aria-label="Phiên đã lưu"></ul>
@@ -179,7 +179,7 @@
       <form method="dialog">
         <h2 id="history-delete-title">Xóa phiên đã lưu?</h2>
         <p id="history-delete-preview" class="history-delete-preview"></p>
-        <p id="history-delete-description">Transcript của phiên này sẽ bị xóa khỏi Mac.</p>
+        <p id="history-delete-description">Transcript của phiên này sẽ bị xóa khỏi máy.</p>
         <div class="history-delete-actions">
           <button class="secondary" value="cancel" autofocus>Hủy</button>
           <button class="secondary danger" value="delete">Xóa phiên</button>
@@ -190,7 +190,7 @@
       <div class="title-row"><div><h1 id="settings-title" tabindex="-1">Cài đặt</h1><p>Giọng dịch, kết nối Gemini và trợ lý.</p></div></div>
       <p id="settings-message" class="message" role="status" hidden></p>
       <div class="settings-grid">
-        <section class="control-card settings-card vieneu-card" aria-labelledby="vieneu-title">
+        <section class="control-card settings-card vieneu-card" data-mac-only aria-labelledby="vieneu-title">
           <div class="vieneu-heading">
             <div><h2 id="vieneu-title">VieNeu-TTS</h2><p id="vieneu-status" role="status">Đang kiểm tra bộ giọng trên Mac…</p></div>
             <button class="secondary" id="vieneu-refresh" type="button">Làm mới giọng</button>
@@ -219,7 +219,7 @@
         </section>
         <section class="control-card settings-card">
           <h2>Gemini API</h2>
-          <p>Key được lưu trong macOS Keychain. Gemini nhận âm thanh để dịch và nhận transcript khi bạn yêu cầu tóm tắt.</p>
+          <p>Key được giữ trong kho bảo mật của hệ điều hành. Gemini nhận âm thanh để dịch và nhận transcript khi bạn yêu cầu tóm tắt.</p>
           <form id="key-form">
             <label>Gemini API key<input type="password" id="key" required autocomplete="off" spellcheck="false" placeholder="Dán key của bạn"></label>
             <div class="group"><button class="primary" type="submit">Lưu API key</button><button class="plain danger" id="forget-key" type="button">Xóa key</button></div>
@@ -228,7 +228,7 @@
         </section>
         <section class="control-card settings-card">
           <h2>Soniox API</h2>
-          <p>Nhập key từ Soniox Console cho phụ đề và giọng dịch. Voxa lưu key trong macOS Keychain.</p>
+          <p>Nhập key từ Soniox Console cho phụ đề và giọng dịch. Voxa giữ key trong kho bảo mật của hệ điều hành.</p>
           <form id="soniox-key-form">
             <label>Soniox API key<input type="password" id="soniox-key" required autocomplete="off" spellcheck="false" placeholder="Dán key của bạn"></label>
             <div class="group"><button class="primary" type="submit">Lưu key Soniox</button><button class="plain danger" id="forget-soniox" type="button">Xóa key</button></div>

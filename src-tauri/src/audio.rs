@@ -5,16 +5,21 @@ use cpal::{
 };
 use crossbeam_queue::ArrayQueue;
 use serde::Serialize;
-use std::{
-    ffi::{c_char, c_void, CStr, CString},
-    sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed},
-        mpsc, Arc,
-    },
+#[cfg(target_os = "macos")]
+use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed},
+    mpsc, Arc,
 };
 use tokio::sync::oneshot;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows::Tap;
+
 use voxa::pcm::{DuckingMixer, Encoder, OriginalAudio, OriginalReader, Playback, AUDIBLE_FLOOR};
 
+#[cfg(target_os = "macos")]
 extern "C" {
     fn voxa_uses_blackhole(device: *const c_char) -> bool;
     fn voxa_sources() -> *mut c_char;
@@ -40,6 +45,7 @@ pub struct Source {
 
 #[derive(Serialize)]
 pub struct Devices {
+    platform: &'static str,
     sources: Vec<Source>,
     microphones: Vec<String>,
     speakers: Vec<String>,
@@ -50,7 +56,8 @@ pub struct Devices {
     default_output_loops: bool,
 }
 
-pub fn devices() -> Result<Devices> {
+#[cfg(target_os = "macos")]
+fn app_sources() -> Result<Vec<Source>> {
     let raw = unsafe { voxa_sources() };
     let mut sources: Vec<Source> = if raw.is_null() {
         Vec::new()
@@ -60,14 +67,30 @@ pub fn devices() -> Result<Devices> {
         parsed.context("Không đọc được danh sách nguồn Core Audio.")?
     };
     sources.sort_by_cached_key(|source| source.name.to_lowercase());
+    Ok(sources)
+}
+
+#[cfg(target_os = "windows")]
+fn app_sources() -> Result<Vec<Source>> {
+    Ok(Vec::new())
+}
+
+pub const MEETING_DEVICE: &str = if cfg!(target_os = "windows") {
+    "VB-CABLE"
+} else {
+    "BlackHole"
+};
+
+pub fn devices() -> Result<Devices> {
+    let sources = app_sources()?;
     let host = cpal::default_host();
     let default_microphone = host.default_input_device().and_then(|d| d.name().ok());
     let default_output = host.default_output_device().and_then(|d| d.name().ok());
-    let default_output_loops = default_output.as_deref().is_some_and(uses_blackhole);
+    let default_output_loops = default_output.as_deref().is_some_and(uses_meeting_cable);
     let mut microphones: Vec<String> = host
         .input_devices()?
         .filter_map(|device| device.name().ok())
-        .filter(|name| !uses_blackhole(name) && name != "Voxa Private Capture")
+        .filter(|name| !uses_meeting_cable(name) && name != "Voxa Private Capture")
         .collect();
     let mut speakers = Vec::new();
     let mut blackhole = Vec::new();
@@ -75,9 +98,9 @@ pub fn devices() -> Result<Devices> {
         .output_devices()?
         .filter_map(|device| device.name().ok())
     {
-        if is_blackhole(&name) {
+        if is_meeting_output(&name) {
             blackhole.push(name);
-        } else if name != "Voxa Private Capture" && !uses_blackhole(&name) {
+        } else if name != "Voxa Private Capture" && !uses_meeting_cable(&name) {
             speakers.push(name);
         }
     }
@@ -85,7 +108,13 @@ pub fn devices() -> Result<Devices> {
         names.sort_unstable();
         names.dedup();
     }
+    let blackhole_installed = if cfg!(target_os = "macos") {
+        std::path::Path::new("/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver").is_dir()
+    } else {
+        !blackhole.is_empty()
+    };
     Ok(Devices {
+        platform: std::env::consts::OS,
         sources,
         microphones,
         speakers,
@@ -93,22 +122,45 @@ pub fn devices() -> Result<Devices> {
         default_microphone,
         default_output,
         default_output_loops,
-        blackhole_installed: std::path::Path::new(
-            "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver",
-        )
-        .is_dir(),
+        blackhole_installed,
     })
 }
 
-fn is_blackhole(name: &str) -> bool {
+#[cfg(target_os = "macos")]
+fn is_meeting_output(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with("blackhole")
 }
 
-fn uses_blackhole(name: &str) -> bool {
-    is_blackhole(name)
+#[cfg(target_os = "macos")]
+fn uses_meeting_cable(name: &str) -> bool {
+    is_meeting_output(name)
         || CString::new(name).is_ok_and(|name| unsafe { voxa_uses_blackhole(name.as_ptr()) })
 }
 
+#[cfg(target_os = "windows")]
+fn vb_cable_endpoint(name: &str, direction: &str) -> bool {
+    name.to_ascii_lowercase()
+        .strip_prefix(direction)
+        .is_some_and(|suffix| suffix.trim_start().starts_with('(') && suffix.contains("vb-audio"))
+}
+
+#[cfg(target_os = "windows")]
+fn is_meeting_output(name: &str) -> bool {
+    vb_cable_endpoint(name, "cable input")
+}
+
+#[cfg(target_os = "windows")]
+fn uses_meeting_cable(name: &str) -> bool {
+    is_meeting_output(name) || vb_cable_endpoint(name, "cable output")
+}
+
+#[cfg(target_os = "windows")]
+pub async fn microphone_permission() -> Result<()> {
+    // Windows desktop microphone access is controlled by the system privacy setting.
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 pub async fn microphone_permission() -> Result<()> {
     match unsafe { voxa_microphone_permission() } {
         1 => Ok(()),
@@ -194,16 +246,19 @@ impl Capture {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct TapContext {
     capture: Arc<Capture>,
     original: Option<Arc<OriginalAudio>>,
 }
 
+#[cfg(target_os = "macos")]
 struct Tap {
     handle: *mut c_void,
     context: Box<TapContext>,
 }
 
+#[cfg(target_os = "macos")]
 impl Tap {
     fn open(
         source: Option<&str>,
@@ -260,6 +315,7 @@ impl Tap {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for Tap {
     fn drop(&mut self) {
         self.context.capture.ready.store(false, Relaxed);
@@ -317,7 +373,7 @@ impl AudioIo {
                 }
             })?;
         let (rate, playback, output_name) =
-            rx.await.context("Không thể khởi tạo luồng Core Audio.")??;
+            rx.await.context("Không thể khởi tạo luồng âm thanh.")??;
         Ok(Self {
             rate,
             playback,
@@ -364,7 +420,7 @@ fn open_playback(
         host.default_output_device(),
         output,
         if route_to_meeting {
-            "Không tìm thấy BlackHole đã chọn."
+            "Không tìm thấy cáp âm thanh đã chọn."
         } else {
             "Không tìm thấy loa hoặc tai nghe đã chọn."
         },
@@ -410,10 +466,10 @@ fn open_playback(
 }
 
 fn validate_output(output_name: &str, route_to_meeting: bool) -> Result<()> {
-    if route_to_meeting && !is_blackhole(output_name) {
-        bail!("Đầu ra cuộc họp phải là thiết bị BlackHole.");
+    if route_to_meeting && !is_meeting_output(output_name) {
+        bail!("Đầu ra cuộc họp phải là thiết bị {MEETING_DEVICE}.");
     }
-    if !route_to_meeting && uses_blackhole(output_name) {
+    if !route_to_meeting && uses_meeting_cable(output_name) {
         bail!(
             "Chọn loa hoặc tai nghe vật lý cho chiều nghe để tránh gửi tiếng cuộc họp ngược lại."
         );
@@ -537,7 +593,7 @@ fn find_tone(bytes: &[u8], frequency: f32) -> Option<std::ops::Range<usize>> {
 
 fn confirmed_loopback(bytes: &[u8]) -> Result<Vec<u8>> {
     let missing = || {
-        anyhow!("Không thu lại đủ hai âm thử từ BlackHole. Kiểm tra đúng thiết bị và quyền Microphone, rồi thử lại.")
+        anyhow!("Không thu lại đủ hai âm thử từ {MEETING_DEVICE}. Kiểm tra thiết bị và quyền micro rồi thử lại.")
     };
     let first = find_tone(bytes, CHECK_TONES[0]).ok_or_else(missing)?;
     let remaining = &bytes[first.end..];
@@ -560,16 +616,28 @@ pub struct LoopbackTest {
 }
 
 pub fn test_blackhole_loopback(device: &str, speaker: Option<&str>) -> Result<LoopbackTest> {
-    if !is_blackhole(device) {
-        bail!("Chọn thiết bị BlackHole để nghe lại.");
+    if !is_meeting_output(device) {
+        bail!("Chọn thiết bị {MEETING_DEVICE} để nghe lại.");
     }
+    #[cfg(target_os = "macos")]
+    let input = device.to_owned();
     let host = cpal::default_host();
+    #[cfg(target_os = "macos")]
     let input = choose_device(
         host.input_devices()?,
         None,
-        Some(device),
-        "Không tìm thấy ngõ thu của BlackHole đã chọn.",
+        Some(&input),
+        "Không tìm thấy đầu thu của cáp âm thanh.",
     )?;
+    #[cfg(target_os = "windows")]
+    let input = host
+        .input_devices()?
+        .find(|input| {
+            input
+                .name()
+                .is_ok_and(|name| vb_cable_endpoint(&name, "cable output"))
+        })
+        .ok_or_else(|| anyhow!("Không tìm thấy CABLE Output."))?;
     let failed = Arc::new(AtomicBool::new(false));
     // Validate the physical monitor before sending any audio to BlackHole.
     let (_monitor, monitor, speaker) = open_playback(speaker, false, failed.clone(), None)?;
@@ -603,6 +671,10 @@ fn check_test_output(failed: &AtomicBool, deadline: std::time::Instant) -> Resul
 }
 
 fn open_devices(setup: Setup, capture: Arc<Capture>, failed: Arc<AtomicBool>) -> Result<Streams> {
+    #[cfg(target_os = "windows")]
+    if matches!(setup.input, Input::System(_)) && setup.duck_original {
+        bail!("Bản thử Windows chưa hỗ trợ giảm tiếng gốc tự động.");
+    }
     let original = (setup.duck_original && matches!(setup.input, Input::System(_)))
         .then(|| Arc::new(OriginalAudio::default()));
     let (output_stream, playback, output_name) = open_playback(
@@ -613,7 +685,15 @@ fn open_devices(setup: Setup, capture: Arc<Capture>, failed: Arc<AtomicBool>) ->
     )?;
     let (tap, mic, rate) = match setup.input {
         Input::System(source) => {
+            #[cfg(target_os = "macos")]
             let (tap, rate) = Tap::open(source.as_deref(), capture, original)?;
+            #[cfg(target_os = "windows")]
+            let (tap, rate) = {
+                if source.is_some() {
+                    bail!("Bản thử Windows hiện thu âm thanh toàn hệ thống.");
+                }
+                Tap::open(capture, failed)?
+            };
             (Some(tap), None, rate)
         }
         Input::Microphone(name) => {
@@ -644,8 +724,8 @@ fn open_microphone(
         "Không tìm thấy micro đã chọn.",
     )?;
     let name = mic.name()?;
-    if uses_blackhole(&name) {
-        bail!("Micro của Voxa phải là micro thật. Thiết bị này chứa BlackHole.");
+    if uses_meeting_cable(&name) {
+        bail!("Chọn micro vật lý cho Voxa. Thiết bị này là cáp {MEETING_DEVICE}.");
     }
     let (stream, rate) = open_input(&mic, capture, failed)?;
     Ok((stream, rate, name))
@@ -665,7 +745,7 @@ fn open_input(
         SampleFormat::U16 => input_stream::<u16>(device, &config.config(), capture, failed),
         format => bail!("Đầu vào sử dụng định dạng chưa hỗ trợ ({format})."),
     }
-    .context("Không mở được đầu vào âm thanh đã chọn.")?;
+    .context("Không mở được đầu vào. Kiểm tra thiết bị và quyền micro trong cài đặt hệ thống.")?;
     stream.play().context("Không thể bắt đầu thu âm.")?;
     Ok((stream, config.sample_rate().0))
 }
@@ -775,9 +855,14 @@ mod tests {
 
     #[test]
     fn meeting_output_does_not_fall_back_to_speakers_or_accept_listening_audio() {
-        assert!(validate_output("BlackHole 2ch", true).is_ok());
-        assert!(validate_output("MacBook Pro Speakers", true).is_err());
-        assert!(validate_output("BlackHole 2ch", false).is_err());
+        let cable = if cfg!(target_os = "windows") {
+            "CABLE Input (VB-Audio Virtual Cable)"
+        } else {
+            "BlackHole 2ch"
+        };
+        assert!(validate_output(cable, true).is_ok());
+        assert!(validate_output("Speakers", true).is_err());
+        assert!(validate_output(cable, false).is_err());
         assert!(validate_output("AirPods", false).is_ok());
     }
 }

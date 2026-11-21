@@ -268,7 +268,10 @@ impl State {
             }
         }
         if lane == Lane::Talk && options.output.as_ref().is_none_or(|name| name.is_empty()) {
-            bail!("Chọn thiết bị BlackHole để gửi tiếng Anh vào cuộc họp.");
+            bail!(
+                "Chọn thiết bị {} để gửi tiếng Anh vào cuộc họp.",
+                audio::MEETING_DEVICE
+            );
         }
         let key = match options.provider {
             SpeechProvider::Gemini => provider::load_key()?,

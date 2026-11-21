@@ -1,6 +1,10 @@
 "use strict";
 
 const api = window.__TAURI__;
+let isWindows = navigator.userAgent.includes("Windows");
+const meetingCable = () => isWindows ? "VB-CABLE" : "BlackHole";
+const credentialStore = () => isWindows ? "Windows Credential Manager" : "macOS Keychain";
+
 const get = (id) => document.getElementById(id);
 const invoke = (command, args) => api.core.invoke(command, args);
 const activeStates = new Set(["opening", "connecting", "reconnecting", "ready", "speaking", "listening", "translating", "silent", "no_signal", "waiting_speech", "replying", "listen_quiet", "stopping"]);
@@ -128,13 +132,25 @@ function openKeySettings(backToListen = false, provider = providerFor("listen"))
   input.scrollIntoView({ block: "nearest" });
 }
 
-function showBlackHole(available, installed) {
+function applyPlatform() {
+  for (const element of document.querySelectorAll("[data-mac-only]")) {
+    element.hidden = isWindows;
+  }
+  get("test-loopback").textContent = `Nghe lại ${meetingCable()}`;
+  get("loopback-help").textContent = `Hai tiếng bíp được thu từ ${meetingCable()} và phát lại qua loa hoặc tai nghe.`;
+  get("latency-location").textContent = `Lượt gần nhất của mỗi giọng, đo đến ngõ ra ${meetingCable()}.`;
+  get("meeting-microphone-help").textContent = isWindows
+    ? "Trong Meet hoặc Zoom, chọn CABLE Output làm micro và tai nghe làm loa."
+    : "Trong Meet hoặc Zoom, chọn BlackHole làm micro và tai nghe làm loa.";
+}
+
+function showMeetingCable(available, installed) {
   get("route-empty").hidden = available;
   get("talk-route").hidden = !available;
-  get("route-state").textContent = installed ? "BlackHole chưa sẵn sàng" : "Cần BlackHole 2ch";
+  get("route-state").textContent = installed ? `${meetingCable()} chưa sẵn sàng` : `Cần ${isWindows ? "VB-CABLE" : "BlackHole 2ch"}`;
   get("route-help").textContent = installed
-    ? "BlackHole đã cài nhưng macOS chưa nhận diện. Nếu vừa cài, hãy khởi động lại Mac."
-    : "Cài BlackHole 2ch để người trong Meet hoặc Zoom nghe bản dịch của bạn.";
+    ? `Kiểm tra ${meetingCable()} trong cài đặt âm thanh rồi làm mới thiết bị.`
+    : `Cài ${isWindows ? "VB-CABLE" : "BlackHole 2ch"} để người trong Meet hoặc Zoom nghe bản dịch của bạn.`;
 }
 
 async function refreshDevices() {
@@ -145,20 +161,22 @@ async function refreshDevices() {
   const voices = refreshVoices();
   try {
     const result = await invoke("devices");
+    if (result.platform) isWindows = result.platform === "windows";
+    applyPlatform();
     const named = (names) => names.map((name) => ({ id: name, name }));
     if (!activeStates.has(statuses.listen)) {
       replaceOptions("source", result.sources, "Toàn hệ thống");
-      replaceOptions("speaker", named(result.speakers), result.default_output ? "Mặc định · " + result.default_output : "Mặc định của Mac");
+      replaceOptions("speaker", named(result.speakers), result.default_output ? "Mặc định · " + result.default_output : "Mặc định hệ thống");
     }
     if (!activeStates.has(statuses.talk) && !activeStates.has(statuses.assistant)) {
-      replaceOptions("microphone", named(result.microphones), result.default_microphone ? "Mặc định · " + result.default_microphone : "Mặc định của Mac");
+      replaceOptions("microphone", named(result.microphones), result.default_microphone ? "Mặc định · " + result.default_microphone : "Mặc định hệ thống");
     }
     if (!activeStates.has(statuses.talk)) {
       replaceOptions("blackhole", named(result.blackhole), null, true);
-      showBlackHole(result.blackhole.length > 0, result.blackhole_installed);
+      showMeetingCable(result.blackhole.length > 0, result.blackhole_installed);
     }
     message("route-warning", result.default_output_loops
-      ? "Ngõ ra mặc định của Mac chứa BlackHole. Chọn tai nghe trong cài đặt âm thanh của Mac và trong Meet/Zoom."
+      ? `Ngõ ra mặc định đang gửi qua ${meetingCable()}. Chọn tai nghe trong cài đặt hệ thống và trong Meet/Zoom.`
       : "");
     updateControls();
   } catch (error) {
@@ -271,7 +289,7 @@ async function testVoice(lane, meeting, status = meeting ? "meeting-test-result"
   const voice = localVoice(lane);
   soundTest = true;
   updateControls();
-  message(status, voice ? "Đang tạo câu mẫu bằng VieNeu-TTS…" : "Đang gửi âm thử vào BlackHole…");
+  message(status, voice ? "Đang tạo câu mẫu bằng VieNeu-TTS…" : `Đang gửi âm thử qua ${meetingCable()}…`);
   try {
     await invoke("test_voice", {
       output: (meeting ? get("blackhole").value : get("speaker").value) || null,
@@ -280,8 +298,8 @@ async function testVoice(lane, meeting, status = meeting ? "meeting-test-result"
       language: lane === "talk" ? "en" : get("language").value,
     });
     message(status, meeting
-      ? "Đã gửi âm thử vào BlackHole. Kiểm tra mức micro trong Meet hoặc nghe lại trong Zoom."
-      : "Đã phát câu mẫu qua loa hoặc tai nghe của Mac.");
+      ? `Đã gửi âm thử qua ${meetingCable()}. Kiểm tra mức micro trong Meet hoặc nghe lại trong Zoom.`
+      : "Đã phát câu mẫu qua loa hoặc tai nghe.");
   } catch (error) {
     message(status, errorText(error));
   } finally {
@@ -313,7 +331,7 @@ async function testListenDucking() {
 async function testBlackHoleLoopback() {
   soundTest = true;
   updateControls();
-  message("meeting-test-result", "Đang gửi và thu lại hai âm thử qua BlackHole…");
+  message("meeting-test-result", `Đang gửi và thu lại hai âm thử qua ${meetingCable()}…`);
   try {
     const { device, speaker } = await invoke("test_blackhole_loopback", {
       device: get("blackhole").value,
@@ -377,7 +395,7 @@ function renderVoiceStage() {
   else if (["opening", "connecting", "reconnecting", "replying", "translating"].includes(state)) mode = "work";
 
   const label = micTesting ? "Kiểm tra micro"
-    : output ? (showTalk ? "Đang phát qua BlackHole" : "Đang phát bản dịch")
+    : output ? (showTalk ? `Đang phát qua ${meetingCable()}` : "Đang phát bản dịch")
     : active ? voiceLabels[state]
     : [talkState, listenState].includes("error") ? "Phiên bị gián đoạn" : "Chưa bắt đầu";
   const channel = micTesting || showTalk ? (output ? get("blackhole").value : "Micro")
@@ -410,7 +428,7 @@ async function testMicrophone() {
       const db = Math.round(20 * Math.log10(peak));
       message("meeting-test-result", `${name} · mức đỉnh ${db} dBFS`);
     } else {
-      message("meeting-test-result", `Tín hiệu từ ${name} rất thấp. Chọn micro khác hoặc tăng mức đầu vào trong cài đặt âm thanh của Mac.`);
+      message("meeting-test-result", `Tín hiệu từ ${name} rất thấp. Chọn micro khác hoặc tăng mức đầu vào trong cài đặt âm thanh của hệ thống.`);
     }
   } catch (error) {
     message("meeting-test-result", errorText(error));
@@ -453,7 +471,7 @@ function updateControls() {
     get(id).disabled = testingBlocked || !get("blackhole").value;
   }
   get("test-microphone").disabled = testingBlocked;
-  get("test-listen-ducking").disabled = !api || testingBlocked;
+  get("test-listen-ducking").disabled = !api || isWindows || testingBlocked;
   const language = get("language").value;
   const localLanguage = language === "vi" || language === "en";
   get("vieneu-language").value = localLanguage ? language : "";
@@ -533,7 +551,7 @@ async function toggleLane(lane) {
     microphone: get("microphone").value || null,
     output: (lane === "talk" ? get("blackhole").value : get("speaker").value) || null,
     sound: get("listen-sound").checked,
-    duckOriginal: lane === "listen" && get("duck-original").checked,
+    duckOriginal: lane === "listen" && !isWindows && get("duck-original").checked,
     voice: lane === "assistant" ? null : (get(lane + "-voice").value || null),
     saveHistory: get("save-history").checked,
     micSensitivity: get("mic-sensitivity").value,
@@ -752,6 +770,7 @@ function bindHistory() {
 
 async function initialize() {
   if (api) document.body.classList.add("native-window");
+  applyPlatform();
   fillLanguages();
   for (const id of preferenceIds) {
     restorePreference(id);
@@ -776,7 +795,7 @@ async function initialize() {
     get("routing-refresh").disabled = true;
     get("vieneu-refresh").disabled = true;
     message("vieneu-status", "Mở Voxa trên Mac để kiểm tra bộ giọng.");
-    showBlackHole(false, false);
+    showMeetingCable(false, false);
     get("history-list").append(node("li", "Chưa có transcript đã lưu.", "placeholder"));
     return;
   }
@@ -887,12 +906,12 @@ async function initialize() {
     } catch (error) { message("settings-message", errorText(error)); }
   });
   get("forget-key").addEventListener("click", async () => {
-    if (!window.confirm("Xóa Gemini API key khỏi Mac này?")) return;
+    if (!window.confirm("Xóa Gemini API key khỏi máy này?")) return;
     try {
       await invoke("forget_key");
       hasKey = false;
       paintKey();
-      message("settings-message", "Đã xóa key khỏi Keychain.");
+      message("settings-message", `Đã xóa key khỏi ${credentialStore()}.`);
     } catch (error) { message("settings-message", errorText(error)); }
   });
 
@@ -903,7 +922,7 @@ async function initialize() {
       get("soniox-key").value = "";
       hasSonioxKey = sonioxKeyChecked = true;
       paintKey();
-      message("settings-message", "Đã lưu Soniox key vào macOS Keychain.");
+      message("settings-message", `Đã lưu Soniox key trong ${credentialStore()}.`);
       if (returnToListen) {
         returnToListen = false;
         showView("live", false);
@@ -918,7 +937,7 @@ async function initialize() {
       hasSonioxKey = false;
       sonioxKeyChecked = true;
       paintKey();
-      message("settings-message", "Đã xóa Soniox key khỏi macOS Keychain.");
+      message("settings-message", `Đã xóa Soniox key khỏi ${credentialStore()}.`);
     } catch (error) { message("settings-message", errorText(error)); }
   });
   get("check-soniox").addEventListener("click", async () => {

@@ -52,11 +52,14 @@ pub fn timestamp() -> i64 {
 
 impl History {
     pub fn open(directory: &Path) -> Result<Self> {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(directory)?;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(directory)?;
         Self::from_connection(Connection::open(directory.join("history.sqlite3"))?)
     }
 
