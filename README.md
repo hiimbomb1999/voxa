@@ -2,7 +2,7 @@
 
 **An open-source, real-time desktop interpreter.** Follow videos and meetings with bilingual captions and spoken translation, or speak Vietnamese and route the English translation into a call.
 
-[Tiếng Việt](docs/huong-dan.md) · [Contributing](CONTRIBUTING.md)
+[Download](#download) · [Tiếng Việt](docs/huong-dan.md) · [Contributing](CONTRIBUTING.md)
 
 ## See Voxa in action
 
@@ -22,6 +22,17 @@
 | Meeting audio controls | Transcript history |
 | --- | --- |
 | ![Voxa meeting controls with push-to-talk and the BlackHole output](docs/media/meeting-routing.png) | ![Voxa transcript history with export and delete actions](docs/media/history.png) |
+
+## Download
+
+Choose a version from [GitHub Releases](https://github.com/hiimbomb1999/voxa/releases). Each release lists the macOS and Windows packages and publishes their SHA-256 checksums.
+
+| Package | Requirements | Open after extracting |
+| --- | --- | --- |
+| `Voxa-v<version>-macOS-arm64.zip` | macOS 14.2+, Apple Silicon | `Voxa.app` |
+| `Voxa-v<version>-Windows-x64.zip` | Windows 11 x64 and Microsoft Edge WebView2 | `voxa.exe` |
+
+These are preview packages. The macOS app is ad hoc signed, and the Windows executable is unsigned.
 
 ## Build and run
 
@@ -49,7 +60,7 @@ For local speech playback, install [uv](https://docs.astral.sh/uv/getting-starte
 
 ### Windows 11 x64 preview
 
-Download the **Voxa-Windows-x64-preview** artifact from a successful [Desktop CI run](https://github.com/hiimbomb1999/voxa/actions/workflows/ci.yml). Sign in to GitHub to download Actions artifacts. Extract the archive and open `voxa.exe`. The preview build is unsigned and requires Microsoft Edge WebView2.
+Use the Windows ZIP from [Download](#download) to try the packaged app.
 
 To build locally, install [Tauri's Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows) and run these commands from the checkout with PowerShell:
 

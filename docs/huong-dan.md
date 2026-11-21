@@ -4,6 +4,10 @@
 
 Phiên dịch âm thanh trực tiếp trên macOS bằng Rust và Tauri, với Gemini Live hoặc Soniox. Cần macOS 14.2 trở lên. Bản thử hiện được đóng gói cho Apple Silicon.
 
+## Tải Voxa
+
+Chọn phiên bản ở [GitHub Releases](https://github.com/hiimbomb1999/voxa/releases). Giải nén gói macOS để mở `Voxa.app`, hoặc gói Windows để mở `voxa.exe`. Xem [yêu cầu hệ thống](../README.md#download) trước khi tải.
+
 ## Windows 11 x64 bản thử
 
 Xem cách tải hoặc tự build ở [mục Windows trong README](../README.md#windows-11-x64-preview). Bản thử dùng WASAPI để thu toàn hệ thống và hỗ trợ Gemini, Soniox. Để gửi tiếng Anh vào cuộc họp, chọn **CABLE Input** ở Voxa và **CABLE Output** làm micro trong Meet/Zoom. Kiểm thử âm thanh trên thiết bị Windows thực tế vẫn đang chờ.
