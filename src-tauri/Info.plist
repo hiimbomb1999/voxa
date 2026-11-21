@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Voxa thu tiếng ứng dụng hoặc hệ thống để dịch trực tiếp.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Voxa thu tiếng khi bạn giữ phím nói để dịch lời của bạn sang tiếng Anh.</string>
+</dict>
+</plist>

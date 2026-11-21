@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Voxa</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><strong>Voxa</strong></div>
+    <nav aria-label="Chế độ">
+      <button class="nav" data-view="live" aria-current="page">Phiên dịch</button>
+      <button class="nav" data-view="history">Lịch sử</button>
+      <button class="nav" data-view="settings">Cài đặt</button>
+    </nav>
+    <span id="key-status" class="key-status" role="status">Đang kiểm tra Keychain</span>
+  </header>
+  <main>
+    <section id="live" class="view">
+      <div class="title-row">
+        <div><h1>Phiên dịch trực tiếp</h1><p>Âm thanh trên Mac và lời bạn nói trong cuộc họp.</p></div>
+        <button id="overlay" class="secondary" aria-pressed="false"><span aria-hidden="true">▣</span> Phụ đề nổi</button>
+      </div>
+      <div id="setup-banner" class="setup" hidden><span>Thêm Gemini API key để bắt đầu.</span><button data-view="settings" class="plain">Mở Cài đặt <span aria-hidden="true">→</span></button></div>
+      <p id="message" class="message" role="status" hidden></p>
+      <div class="workspace">
+        <section class="captions">
+          <div class="panel-heading">
+            <div><h2>Phụ đề</h2><p id="caption-state">Chưa có phiên đang chạy</p></div>
+            <label class="compact"><span class="sr-only">Nội dung phụ đề</span>
+              <select id="caption-mode"><option value="both">Song ngữ</option><option value="translation">Bản dịch</option><option value="original">Lời gốc</option></select>
+            </label>
+          </div>
+          <div id="lines" class="lines" role="log" aria-live="off" aria-label="Nội dung phụ đề">
+            <div id="empty-caption" class="empty"><div class="caption-symbol" aria-hidden="true">≡</div><strong>Phụ đề sẽ hiện ở đây</strong><p>Bắt đầu dịch khi video hoặc cuộc họp đang phát tiếng.</p></div>
+          </div>
+          <div class="panel-footer"><label class="check"><input id="save-history" type="checkbox" checked> Lưu transcript</label><button class="plain" id="refresh">Làm mới thiết bị</button></div>
+        </section>
+        <aside class="controls" aria-label="Nguồn và đầu ra">
+          <section class="control-card">
+            <div class="control-title"><span class="lane-icon listen" aria-hidden="true">◖</span><div><h2>Nghe bản dịch</h2><p id="listen-status" role="status">Chưa bắt đầu</p></div></div>
+            <meter id="listen-meter" min="0" max="1" value="0" aria-label="Mức tín hiệu tiếng hệ thống"></meter>
+            <div class="field-row">
+              <label>Nguồn âm thanh<select id="source"><option value="">Toàn hệ thống</option></select></label>
+              <label>Dịch sang<select id="language"></select></label>
+            </div>
+            <div class="field-row">
+              <label>Phát qua<select id="speaker"><option value="">Mặc định của Mac</option></select></label>
+              <label>Giọng dịch<select id="listen-voice"><option value="">Trực tiếp</option><option>Kore</option><option>Puck</option><option>Charon</option><option>Aoede</option><option>Zephyr</option></select></label>
+            </div>
+            <label class="check sound"><input type="checkbox" id="listen-sound" checked> Phát giọng dịch</label>
+            <button id="listen-toggle" class="primary full" type="button">Bắt đầu dịch</button>
+          </section>
+          <section class="control-card">
+            <div class="control-title"><span class="lane-icon talk" aria-hidden="true">↗</span><div><h2>Nói trong cuộc họp</h2><p id="talk-status" role="status">Việt → Anh</p></div></div>
+            <meter id="talk-meter" min="0" max="1" value="0" aria-label="Mức tín hiệu micro"></meter>
+            <div class="field-row">
+              <label>Micro của bạn<select id="microphone"><option value="">Mặc định của Mac</option></select></label>
+              <label>Gửi qua<select id="blackhole"><option value="">Chưa tìm thấy BlackHole</option></select></label>
+            </div>
+            <div class="routing"><p class="hint" id="routing-hint">Cài BlackHole 2ch, rồi chọn thiết bị đó làm micro trong Meet hoặc Zoom.</p><button class="plain" id="test-blackhole" type="button" hidden>Phát âm thử</button></div>
+            <button id="talk-toggle" class="secondary full" type="button">Bật dịch micro</button>
+            <button id="talk-press" class="hold full" type="button" disabled>Giữ để nói <kbd>⌃ ⇧ Space</kbd></button>
+          </section>
+        </aside>
+      </div>
+    </section>
+    <section id="history" class="view" hidden aria-labelledby="history-title">
+      <div class="title-row"><div><h1 id="history-title">Lịch sử</h1><p>Transcript đã lưu trên Mac.</p></div><button class="secondary" id="reload-history">Làm mới</button></div>
+      <p id="history-message" class="message" role="status" hidden></p>
+      <div class="history-layout">
+        <ul id="history-list" class="history-list" aria-label="Phiên đã lưu"></ul>
+        <section class="history-detail">
+          <div class="panel-heading"><h2 id="history-session-title">Chọn một phiên</h2></div>
+          <div id="history-actions" class="history-actions" hidden>
+            <label class="compact"><span class="sr-only">Định dạng xuất</span><select id="format"><option value="txt">TXT</option><option value="srt">SRT</option><option value="md">Markdown</option></select></label>
+            <button class="secondary" id="export">Xuất transcript</button>
+            <button class="secondary" id="summarize">Tóm tắt cuộc họp</button>
+            <button class="plain danger" id="delete">Xóa</button>
+          </div>
+          <pre id="summary" class="summary" hidden></pre>
+          <div id="history-lines" class="history-lines"></div>
+        </section>
+      </div>
+    </section>
+    <section id="settings" class="view" hidden aria-labelledby="settings-title">
+      <div class="title-row"><div><h1 id="settings-title">Cài đặt</h1><p>Kết nối Gemini và chọn cách dùng micro.</p></div></div>
+      <p id="settings-message" class="message" role="status" hidden></p>
+      <div class="settings-grid">
+        <section class="control-card settings-card">
+          <h2>Gemini API</h2>
+          <p>Key được lưu trong macOS Keychain. Gemini nhận âm thanh để dịch và nhận transcript khi bạn yêu cầu tóm tắt.</p>
+          <form id="key-form">
+            <label>Gemini API key<input type="password" id="key" required autocomplete="off" spellcheck="false" placeholder="Dán key của bạn"></label>
+            <div class="group"><button class="primary" type="submit">Lưu API key</button><button class="plain danger" id="forget-key" type="button">Xóa key</button></div>
+          </form>
+        </section>
+        <section class="control-card settings-card">
+          <h2>Trợ lý giọng nói</h2>
+          <p id="assistant-status" role="status">Phản hồi qua loa hoặc tai nghe đã chọn ở Phiên dịch.</p>
+          <button id="assistant-toggle" class="secondary full">Bật trợ lý</button>
+          <button id="assistant-press" class="hold full" disabled>Giữ để nói với trợ lý</button>
+          <div id="assistant-lines" class="assistant-lines" aria-live="polite"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
